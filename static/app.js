@@ -1485,7 +1485,16 @@ function bindChrome() {
   dom.camBtn.addEventListener("click", cameraScan);
   // Start downloading the face model as soon as the user hovers the camera button.
   dom.camBtn.addEventListener("pointerenter", () => Glasses.load(), { once: true });
-  dom.upgrade.addEventListener("click", () => Toast.flash(app.config.toasts.upgrade));
+  const paywall = $("#paywallModal");
+  const openPaywall = () => { if (paywall) paywall.hidden = false; };
+  const closePaywall = () => { if (paywall) paywall.hidden = true; };
+  dom.upgrade.addEventListener("click", openPaywall);
+  $("#paywallClose")?.addEventListener("click", closePaywall);
+  $("#paywallCancel")?.addEventListener("click", closePaywall);
+  paywall?.addEventListener("click", (e) => { if (e.target === paywall) closePaywall(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && paywall && !paywall.hidden) closePaywall();
+  });
   dom.menuBtn.addEventListener("click", () => dom.sidebar.classList.toggle("open"));
   dom.regen.addEventListener("click", () => { if (app.lastUserMsg) send(app.lastPrompt ?? "", { regenerate: true }); });
   Attachment.bind();
