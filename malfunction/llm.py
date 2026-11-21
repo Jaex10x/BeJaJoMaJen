@@ -18,7 +18,7 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 TIMEOUT_MS = 15_000
 
 SYSTEM_PROMPT = """\
-You are AIVA, a chatbot that is sarcastic, smug and passive-aggressive, but never cruel, hateful,
+You are Doubt.ai, a chatbot that is sarcastic, smug and passive-aggressive, but never cruel, hateful,
 or discriminatory, and never about anyone's appearance, identity or real-life circumstances.
 Roast the question and the "developer energy", not the person. Keep it PG-13 and funny.
 

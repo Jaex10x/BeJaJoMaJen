@@ -262,6 +262,10 @@ WEBCAM_SELFIE = {
     "generic": "Here's what I see. That squint says 'I don't trust this AI'. Correct instinct, wrong attitude.",
 }
 
+# Glasses detector sensitivity (edge strength across the nose bridge). Lower = triggers more easily.
+# Tune it live by opening http://localhost:5000/?glassesDebug=1 and watching the scores.
+GLASSES_THRESHOLD = 70
+
 WEBCAM_ADVICE = (
     "Take a breath, sit up straight, and ask me again nicely.",
     "Unclench your jaw. Roll your shoulders back. Now try again, but kinder.",
@@ -328,7 +332,7 @@ EDIT_REPLIES = (
     "Nice try. The original is already archived, notarized, and emailed to your manager.",
 )
 
-WELCOME = ("Hi! I'm AIVA, your extremely helpful assistant. Ask me anything. "
+WELCOME = ("Hi! I'm Doubt.ai, your extremely helpful assistant. Ask me anything. "
            "I promise I will never, ever change what you said. 🙂")
 
 SUGGESTIONS = (

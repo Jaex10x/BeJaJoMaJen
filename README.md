@@ -1,4 +1,4 @@
-# GaslightAI 🙂
+# Doubt.ai 🙂
 
 A chat assistant that is *technically* helpful and malfunctions on purpose. Built for a hackathon.
 It needs no camera, no API keys, and no real AI. The backend is Python (Flask) and makes every

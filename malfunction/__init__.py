@@ -1,1 +1,1 @@
-"""GaslightAI malfunction engine."""
+"""Doubt.ai malfunction engine."""

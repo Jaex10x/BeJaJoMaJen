@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AIVA Chatbot</title>
+  <title>Doubt.ai</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -13,7 +13,7 @@
 <div class="app">
   <!-- ============ Sidebar ============ -->
   <aside class="sidebar" id="sidebar">
-    <div class="side-brand"><b>AIVA</b> CHATBOT</div>
+    <div class="side-brand"><b>Doubt</b>.ai</div>
     <button class="new-chat" id="newChat" type="button"><span class="plus">+</span> New Chat</button>
     <nav class="history" id="history" aria-label="Chat history"></nav>
     <button class="upgrade" id="upgrade" type="button"><span class="i" data-icon="sparkle"></span> Upgrade to Plus</button>
@@ -35,7 +35,7 @@
   <main class="main">
     <section class="conversation" id="chat" aria-live="polite">
       <div class="empty" id="empty">
-        <h2 class="hero" aria-label="AIVA Chatbot"><span>AIVA</span><span>CHATBOT</span></h2>
+        <h2 class="hero" aria-label="Doubt.ai"><span>DOUBT</span><span>.AI</span></h2>
         <div class="suggestions" id="suggestions"></div>
       </div>
     </section>
@@ -82,11 +82,17 @@
   <div class="cam-caption" id="camCaption">Initializing camera...</div>
 </div>
 
+<!-- Clicking the message box: a job application flies through the screen ("maybe get a job instead") -->
+<img class="flythrough" id="flythrough" hidden alt="" aria-hidden="true"
+     src="{{ url_for('static', filename='img/job_application.png') }}">
+
 <!-- Theme-toggle jumpscares (one per direction) -->
 <div class="jumpscare" id="jumpscare" hidden aria-hidden="true"
      data-dark="{{ url_for('static', filename='img/jumpscare.png') }}"
-     data-light="{{ url_for('static', filename='img/lightscare.png') }}">
+     data-light="{{ url_for('static', filename='img/lightscare.png') }}"
+     data-nerd="{{ url_for('static', filename='img/nerd.png') }}">
   <img src="{{ url_for('static', filename='img/jumpscare.png') }}" alt="">
+  <div class="scare-emoji" hidden></div>
   <div class="flash"></div>
 </div>
 

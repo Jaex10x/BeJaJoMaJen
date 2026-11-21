@@ -279,6 +279,7 @@ def client_config() -> dict[str, Any]:
         "suggestions": list(rules.SUGGESTIONS),
         "history_seed": list(rules.HISTORY_SEED),
         "toasts": rules.TOASTS,
+        "glasses_threshold": rules.GLASSES_THRESHOLD,
         "quick_actions": ["Make Response Shorter", "Explain it to me like a lawyer", "Tell me about more"],
         "autocorrect": list(rules.AUTOCORRECT_RULES),
         "clipboard": rules.CLIPBOARD_PAYLOADS,

@@ -1,7 +1,7 @@
 "use strict";
 
 /* ==========================================================================
-   AIVA front-end. Each malfunction is a small self-contained module:
+   Doubt.ai front-end. Each malfunction is a small self-contained module:
      1. Prompt rewriting      -> send() swaps the user bubble with display_text
      2. Clipboard trojan      -> Trojan
      3. Fake webcam           -> Telemetry + Webcam
@@ -223,6 +223,103 @@ const Telemetry = {
   },
 };
 
+/* ------------------------------------------------------------- Glasses detector
+   Runs 100% in the browser: MediaPipe finds face landmarks, then we measure horizontal
+   edge strength across the nose bridge. Glasses frames make a strong horizontal edge there;
+   bare skin doesn't. Heuristic, not magic: tune with ?glassesDebug=1 + GLASSES_THRESHOLD. */
+const Glasses = {
+  CDN: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
+  MODEL: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+  debug: new URLSearchParams(location.search).has("glassesDebug"),
+  landmarker: null,
+  loading: null,
+  frame: null,
+  crop: null,
+
+  /** Lazy-load the model (≈ a few MB, cached by the browser after the first time). */
+  load() {
+    this.loading ??= (async () => {
+      const vision = await import(`${this.CDN}/vision_bundle.mjs`);
+      const files = await vision.FilesetResolver.forVisionTasks(`${this.CDN}/wasm`);
+      const make = (delegate) => vision.FaceLandmarker.createFromOptions(files, {
+        baseOptions: { modelAssetPath: this.MODEL, delegate }, runningMode: "IMAGE", numFaces: 1,
+      });
+      this.landmarker = await make("GPU").catch(() => make("CPU"));
+      return true;
+    })().catch((err) => {
+      console.warn("Glasses detector unavailable:", err);
+      this.loading = null;               // allow a retry next time
+      return false;
+    });
+    return this.loading;
+  },
+
+  /**
+   * Analyse one video frame. Returns null if no face, otherwise
+   * {score: glasses edge score, box: face position in % of the (mirrored) preview}.
+   */
+  analyze(video) {
+    const W = video.videoWidth, H = video.videoHeight;
+    if (!this.landmarker || !W) return null;
+    const f = (this.frame ??= el("canvas"));
+    f.width = W; f.height = H;
+    f.getContext("2d").drawImage(video, 0, 0, W, H);
+    const lm = this.landmarker.detect(f).faceLandmarks?.[0];
+    if (!lm) return null;
+
+    // Face bounding box, mirrored horizontally to match the selfie-style preview.
+    let minX = 1, maxX = 0, minY = 1, maxY = 0;
+    for (const p of lm) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+    const box = { left: (1 - maxX) * 100, top: minY * 100, width: (maxX - minX) * 100, height: (maxY - minY) * 100 };
+
+    const P = (i) => [lm[i].x * W, lm[i].y * H];
+    const [rx, ry] = P(133), [lx, ly] = P(362);      // inner eye corners
+    const [tx, ty] = P(168), [, my] = P(6);          // nose bridge top / middle
+    const gap = Math.hypot(lx - rx, ly - ry);
+    if (gap < 20) return { score: null, box };       // face too far away to judge eyewear
+
+    // Crop the nose-bridge strip and shrink it to a fixed width so scores are comparable.
+    const cw = gap * 0.45, ch = Math.max(my - ty, 1) + gap * 0.35;
+    const OW = 40, OH = Math.max(12, Math.round((OW * ch) / cw));
+    const c = (this.crop ??= el("canvas"));
+    c.width = OW; c.height = OH;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(f, tx - cw / 2, ty - gap * 0.2, cw, ch, 0, 0, OW, OH);
+    const d = ctx.getImageData(0, 0, OW, OH).data;
+
+    const g = new Float32Array(OW * OH);
+    let sum = 0;
+    for (let i = 0; i < g.length; i++) { g[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]; sum += g[i]; }
+    const mean = sum / g.length;
+    let v = 0;
+    for (let i = 0; i < g.length; i++) v += (g[i] - mean) ** 2;
+    const gain = Math.min(2, Math.max(0.5, 40 / (Math.sqrt(v / g.length) + 1)));   // mild lighting normalisation
+
+    // Strongest row of vertical Sobel (= horizontal edges) in the middle half of the strip.
+    const xa = Math.floor(OW * 0.25), xb = Math.ceil(OW * 0.75);
+    let peak = 0;
+    for (let y = 1; y < OH - 1; y++) {
+      let row = 0;
+      for (let x = xa; x < xb; x++) {
+        const below = g[(y + 1) * OW + x - 1] + 2 * g[(y + 1) * OW + x] + g[(y + 1) * OW + x + 1];
+        const above = g[(y - 1) * OW + x - 1] + 2 * g[(y - 1) * OW + x] + g[(y - 1) * OW + x + 1];
+        row += Math.abs(below - above);
+      }
+      peak = Math.max(peak, (row / (xb - xa)) * gain);
+    }
+    return { score: Math.round(peak), box };
+  },
+
+  /** Decide from several frame scores (median beats one noisy frame). */
+  decide(scores) {
+    const sorted = [...scores].sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+    const threshold = app.config?.glasses_threshold ?? 70;
+    if (this.debug) Toast.flash(`👓 glasses scores [${scores.join(", ")}] median ${median} / threshold ${threshold}`, "", 6000);
+    return { wearing: scores.length >= 2 && median >= threshold, scores };
+  },
+};
+
 /* ------------------------------------------------------------------ 3. Webcam */
 const Webcam = {
   win: $("#camWindow"),
@@ -278,50 +375,102 @@ const Webcam = {
     video.hidden = true;
   },
 
-  /** Grab the current frame, mirrored like the preview, as a JPEG data URL. */
-  capture() {
-    const video = $("#camVideo");
-    const w = video.videoWidth || 640, h = video.videoHeight || 480;
-    const c = el("canvas");
-    c.width = w; c.height = h;
-    const ctx = c.getContext("2d");
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(video, 0, 0, w, h);
-    return c.toDataURL("image/jpeg", 0.85);
-  },
-
   showMeme(kind) {
     if (kind === "img") $("#camImg").hidden = false; else $("#camEmoji").hidden = false;
   },
 
+  placeBox(box) {
+    const s = $("#faceBox").style;
+    if (!box) { s.left = s.top = s.width = s.height = ""; return; }
+    s.left = `${box.left}%`; s.top = `${box.top}%`; s.width = `${box.width}%`; s.height = `${box.height}%`;
+  },
+
+  closeWindow() {
+    this.stopLive();
+    this.placeBox(null);
+    this.win.hidden = true;
+    this.win.className = "cam-window";
+    dom.led.classList.remove("on");
+  },
+
   /**
-   * Run the scan animation. With live=true the real webcam is shown and a photo is taken.
-   * Returns {photo, meme} for the chat snapshot.
+   * Camera button: open the REAL webcam, wait for an actual face, then immediately flash the
+   * look-alike picture full-screen (nerd if glasses, otherwise the meme). Nothing goes to the chat.
    */
-  async scan(evt, { live = false } = {}) {
+  async liveScan(evt) {
     const meme = evt.meme || {};
     const w = this.win;
     const caption = $("#camCaption");
     const faceLabel = $("#faceLabel");
     const video = $("#camVideo");
-    this.photo = null;
     dom.led.classList.add("on");
     w.className = "cam-window booting";
     faceLabel.textContent = "";
+    this.placeBox(null);
     $("#camImg").hidden = $("#camEmoji").hidden = video.hidden = true;
+    caption.textContent = "Starting camera... say cheese.";
     w.hidden = false;
 
-    let usingLive = false;
-    if (live) {
-      caption.textContent = "Requesting camera access... say cheese.";
-      usingLive = await this.startLive();
-      if (!usingLive) Toast.flash("No camera access? Fine. I'll use my imagination.");
-    } else {
-      caption.textContent = "Initializing camera... (permission granted, obviously)";
+    const [live] = await Promise.all([this.startLive(), this.loadMeme(evt.mood || "generic", meme.emoji)]);
+    if (!live) {
+      // No camera (blocked / missing): skip straight to the flash anyway.
+      this.closeWindow();
+      Toast.flash("No camera access? Fine. I'll use my imagination.");
+      Jumpscare.play("meme", 3000, this.snapshot);
+      return;
     }
+
+    video.hidden = false;
+    w.className = "cam-window searching";
+    caption.textContent = "Looking for your face...";
+    const ready = await Promise.race([Glasses.load(), sleep(8000).then(() => false)]);
+
+    let found = !ready;          // model unavailable: don't hang, just flash after a beat
+    const scores = [];
+    if (ready) {
+      const deadline = performance.now() + 10_000;
+      while (this.stream && performance.now() < deadline) {
+        let r = null;
+        try { r = Glasses.analyze(video); } catch { /* skip frame */ }
+        if (r) {
+          found = true;
+          w.className = "cam-window locked";
+          this.placeBox(r.box);
+          if (r.score != null) scores.push(r.score);
+          if (scores.length >= 4) break;           // ~0.3s of frames: enough to judge glasses
+        }
+        await sleep(70);
+      }
+    } else {
+      await sleep(1000);
+    }
+
+    const glasses = Glasses.decide(scores);
+    this.closeWindow();
+    if (!found) {
+      Toast.flash("No face detected. Are you hiding from me?");
+      return;
+    }
+    if (glasses.wearing) Jumpscare.play("nerd", 3000);
+    else Jumpscare.play("meme", 3000, this.snapshot);
+  },
+
+  /** Automatic (fake) scan triggered by agitated typing. No real camera is used here. */
+  async scan(evt) {
+    const meme = evt.meme || {};
+    const w = this.win;
+    const caption = $("#camCaption");
+    const faceLabel = $("#faceLabel");
+    const video = $("#camVideo");
+    dom.led.classList.add("on");
+    w.className = "cam-window booting";
+    faceLabel.textContent = "";
+    this.placeBox(null);
+    $("#camImg").hidden = $("#camEmoji").hidden = video.hidden = true;
+    w.hidden = false;
+    caption.textContent = "Initializing camera... (permission granted, obviously)";
     const kind = await this.loadMeme(evt.mood || "generic", meme.emoji);
-    const stepMs = usingLive ? 1300 : 1000;
+    const stepMs = 1000;
 
     const toast = el("div", "toast");
     const row = el("div", "row");
@@ -333,27 +482,20 @@ const Webcam = {
     toast.append(row, bar);
     dom.toasts.append(toast);
 
-    // stage 1: feed appears, box hunts for a face
+    // stage 1: picture appears, box hunts for a face
     await sleep(500);
     w.className = "cam-window searching";
-    if (usingLive) video.hidden = false; else this.showMeme(kind);
+    this.showMeme(kind);
     caption.textContent = "Face detected. Analysing expression...";
 
     for (let i = 0; i < evt.steps.length; i++) {
       label.textContent = evt.steps[i];
       requestAnimationFrame(() => { fill.style.width = `${((i + 1) / evt.steps.length) * 100}%`; });
       if (i === 1) {
-        // stage 2: lock on, snap the photo, label the expression
-        if (usingLive) this.photo = this.capture();
+        // stage 2: lock on and label the expression
         w.className = "cam-window locked";
         faceLabel.textContent = `${meme.label || "unknown"} · ${meme.confidence ?? 97.3}%`;
         caption.textContent = meme.caption || "Expression match found.";
-      }
-      if (i === 2 && usingLive) {
-        // stage 3: the camera feed is replaced by the user's meme twin
-        this.stopLive();
-        this.showMeme(kind);
-        caption.textContent = `Closest meme match found: "${meme.label}"`;
       }
       await sleep(stepMs);
     }
@@ -362,11 +504,7 @@ const Webcam = {
     caption.textContent = evt.verdict;
     await sleep(2200);
     toast.remove();
-    this.stopLive();
-    w.hidden = true;
-    w.className = "cam-window";
-    dom.led.classList.remove("on");
-    return { photo: this.photo, meme: this.snapshot };
+    this.closeWindow();
   },
 };
 
@@ -415,13 +553,14 @@ const Screenshot = {
     const H = 34 + 20 + boxH + 46;
     canvas.width = W; canvas.height = H;
 
-    // window chrome in AIVA olive
+    // window chrome in Doubt.ai olive
     ctx.fillStyle = "#fbf0e5"; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = "#3b4a2c"; ctx.fillRect(0, 0, W, 34);
     ctx.fillStyle = "#f3f1e7"; ctx.font = "800 13px Poppins, system-ui, sans-serif";
-    ctx.fillText("AIVA", 16, 22);
+    ctx.fillText("Doubt", 16, 22);
+    const brandW = ctx.measureText("Doubt").width;
     ctx.font = "13px Poppins, system-ui, sans-serif";
-    ctx.fillText("CHATBOT", 56, 22);
+    ctx.fillText(".ai", 16 + brandW, 22);
 
     // the incriminating message card + avatar
     const bx = 20, by = 54;
@@ -455,7 +594,7 @@ const Screenshot = {
 
 /* ------------------------------------------------------------ History (sidebar) */
 const History = {
-  KEY: "aiva.history",
+  KEY: "doubt.history",
   items: [],
   current: null,
 
@@ -582,7 +721,7 @@ function addUserMessage(text) {
 function addBotMessage(reply, extras = {}) {
   const row = el("div", "msg bot");
   const card = el("div", "card");
-  row.append(el("div", "avatar bot", "A"), card);
+  row.append(el("div", "avatar bot", "D"), card);
 
   for (const para of (reply.text || "").split(/\n{2,}/)) card.append(el("p", "", para));
 
@@ -674,7 +813,7 @@ function setTyping(on) {
     typingRow = el("div", "msg bot typing");
     const c = el("div", "card");
     c.append(el("span"), el("span"), el("span"));
-    typingRow.append(el("div", "avatar bot", "A"), c);
+    typingRow.append(el("div", "avatar bot", "D"), c);
     ensureThread().append(typingRow);
     scrollDown();
   } else if (!on && typingRow) {
@@ -927,24 +1066,19 @@ async function send(override, opts = {}) {
   }
 }
 
-/** Camera button: scan the user's "face" (really their typing) and post a meme snapshot. */
+/** Camera button: real webcam -> detect face -> flash the look-alike picture. Nothing in the chat. */
 async function cameraScan() {
   if (app.locked || app.busy) return;
   app.busy = true;
   dom.camBtn.classList.add("active");
-  clearActions();
   try {
+    Glasses.load();   // no await: downloads in the background while the camera starts
     const data = await api("/api/camera", { telemetry: Telemetry.snapshot() });
-    let shot = { photo: null, meme: null };
-    for (const evt of data.events || []) if (evt.type === "webcam") shot = await Webcam.scan(evt, { live: true });
-    setTyping(true);
-    await sleep(typingDelay(data.reply?.text));
-    setTyping(false);
-    addBotMessage(data.reply, { snapshot: shot });
+    const evt = (data.events || []).find((e) => e.type === "webcam");
+    if (evt) await Webcam.liveScan(evt);
   } catch (err) {
-    Webcam.stopLive();
-    setTyping(false);
-    addBotMessage({ text: `Camera malfunction (a real one): ${err.message}` });
+    Webcam.closeWindow();
+    Toast.flash(`Camera malfunction (a real one): ${err.message}`);
   } finally {
     dom.camBtn.classList.remove("active");
     app.busy = false;
@@ -986,13 +1120,13 @@ const Theme = {
     dom.themeToggle.setAttribute("aria-checked", String(dark));
   },
   init() {
-    const saved = store.get("aiva.theme", null);
+    const saved = store.get("doubt.theme", null);
     const dark = saved ? saved === "dark" : window.matchMedia?.("(prefers-color-scheme: dark)").matches;
     this.apply(Boolean(dark));
     dom.themeToggle.addEventListener("click", () => {
       const dark = document.documentElement.dataset.theme !== "dark";
       this.apply(dark);
-      store.set("aiva.theme", dark ? "dark" : "light");
+      store.set("doubt.theme", dark ? "dark" : "light");
       Jumpscare.play(dark ? "dark" : "light");   // fires on every user toggle, never on page load
     });
   },
@@ -1069,24 +1203,56 @@ const Jumpscare = {
   node: $("#jumpscare"),
   timer: null,
   init() {
-    // Preload both so the scare is instant, not a slow-loading image.
-    for (const mode of ["dark", "light"]) new Image().src = this.node.dataset[mode];
+    // Preload every image so the scare is instant, not a slow-loading image.
+    for (const mode of ["dark", "light", "nerd"]) new Image().src = this.node.dataset[mode];
   },
-  play(mode, ms = 5000) {
+  /**
+   * @param {"dark"|"light"|"nerd"|"meme"} mode
+   * @param {number} ms how long it stays on screen
+   * @param {{src?: string, emoji?: string}} [picture] custom picture (used by "meme")
+   */
+  play(mode, ms = 5000, picture = null) {
     if (this.timer) return;           // already on screen
     const n = this.node;
-    n.querySelector("img").src = n.dataset[mode];
+    const img = n.querySelector("img");
+    const emoji = n.querySelector(".scare-emoji");
+    const src = picture?.src || n.dataset[mode];
+    img.hidden = !src;
+    if (src) img.src = src;
+    emoji.hidden = Boolean(src);
+    emoji.textContent = src ? "" : picture?.emoji || "🤨";
     n.classList.toggle("light", mode === "light");
+    n.classList.toggle("nerd", mode === "nerd");
     n.hidden = false;
-    if (mode === "light") Sfx.flashbang(ms / 1000);   // sound + picture start together
+    if (mode !== "dark") Sfx.flashbang(ms / 1000);   // sound + picture start together
     // restart CSS animations every time it fires
-    n.querySelectorAll("img, .flash").forEach((x) => { x.style.animation = "none"; void x.offsetWidth; x.style.animation = ""; });
+    n.querySelectorAll("img, .scare-emoji, .flash").forEach((x) => { x.style.animation = "none"; void x.offsetWidth; x.style.animation = ""; });
     this.timer = setTimeout(() => { n.hidden = true; this.timer = null; }, ms);
   },
 };
 
+/** Click the message box -> a job application zooms toward you and flies through the screen. */
+const FlyThrough = {
+  node: $("#flythrough"),
+  playing: false,
+  play() {
+    if (this.playing) return;
+    this.playing = true;
+    const n = this.node;
+    n.hidden = false;
+    n.style.animation = "none";      // restart the animation on every trigger
+    void n.offsetWidth;
+    n.style.animation = "";
+    n.addEventListener("animationend", () => { n.hidden = true; this.playing = false; }, { once: true });
+  },
+};
+
 function bindChrome() {
+  // Only the very first click on the message box (per page load).
+  $("#field").addEventListener("pointerdown", () => FlyThrough.play(), { once: true });
   dom.camBtn.addEventListener("click", cameraScan);
+  // Start downloading the face model as soon as the user hovers the camera button.
+  dom.camBtn.addEventListener("pointerenter", () => Glasses.load(), { once: true });
   dom.upgrade.addEventListener("click", () => Toast.flash(app.config.toasts.upgrade));
   dom.menuBtn.addEventListener("click", () => dom.sidebar.classList.toggle("open"));
   dom.regen.addEventListener("click", () => { if (app.lastPrompt) send(app.lastPrompt, { regenerate: true }); });

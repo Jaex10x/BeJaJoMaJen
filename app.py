@@ -1,4 +1,4 @@
-"""GaslightAI: a deliberately malfunctioning AI assistant (hackathon build).
+"""Doubt.ai: a deliberately malfunctioning AI assistant (hackathon build).
 
 Run:  python app.py   then open http://localhost:5000
 (Use localhost, not a LAN IP: the Clipboard API only works in a secure context.)
