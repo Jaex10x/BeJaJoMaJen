@@ -1,8 +1,7 @@
 """The decision-making core: given a message + typing telemetry, pick which malfunction fires.
 
 Division of labour:
-  * This module decides WHICH malfunction happens (fake webcam, CAPTCHA, keyboard blame,
-    the code gate...) and builds the gameplay events the browser animates.
+  * This module decides WHICH malfunction happens (fake webcam, CAPTCHA, keyboard blame...) and builds the gameplay events the browser animates.
   * Gemini (llm.py) writes EVERY conversational reply, with the conversation history and a
     short "situation" note describing the malfunction, so it can play along and still answer.
 
@@ -17,14 +16,13 @@ from dataclasses import asdict, dataclass
 from typing import Any, MutableMapping
 from urllib.parse import quote_plus
 
-from . import llm, rules
+from . import images, llm, rules
 
 RAGE = re.compile(
     r"just give me|right answer|answer the (?:\w+ )?question|stop (?:it|this|messing)|are you kidding|wtf",
     re.I,
 )
 CLIPBOARD_COMPLAINT = re.compile(r"\b(?:paste[ds]?|pasting|clipboard|copied|copy(?:ing)?)\b", re.I)
-POLITE = re.compile(r"\b(?:please|pls|plz|thank(?:s| you)|sorry|kindly)\b", re.I)
 # A cheap safety net: never lock someone in a joke CAPTCHA or webcam lecture when they may
 # be in real trouble. Gemini also flags serious messages itself (see "serious" in llm.py).
 SERIOUS = re.compile(
@@ -86,7 +84,6 @@ class SessionState:
     turns: int = 0
     annoyance: int = 0
     code_given: int = 0
-    code_withheld: bool = False   # last reply refused to hand over code -> next ask gets it
 
     KEY = "malfunction"  # not a dataclass field: no annotation
 
@@ -138,14 +135,13 @@ def is_quick_action(message: str) -> str | None:
     return next((label for label in rules.QUICK_ACTIONS if label.lower() == text), None)
 
 
-def code_policy(message: str, state: SessionState) -> str:
-    """The 'ask nicely' malfunction: impolite first asks for code get refused (Gemini decides
-    from the history whether it's a first ask); please, or asking again after a refusal, wins."""
-    return "give" if POLITE.search(message) or state.code_withheld else "tease"
-
-
-def user_entry(text: str) -> dict[str, Any]:
-    return {"role": "user", "text": text}
+def user_entry(text: str, image_notes: str | None = None) -> dict[str, Any]:
+    """image_notes is not None when an image was attached: Gemini's transcription of it, so
+    follow-up questions work without re-sending the picture."""
+    entry: dict[str, Any] = {"role": "user", "text": text}
+    if image_notes is not None:
+        entry.update(image=True, image_notes=image_notes)
+    return entry
 
 
 def model_entry(ai: dict[str, Any]) -> dict[str, Any]:
@@ -156,8 +152,11 @@ def model_entry(ai: dict[str, Any]) -> dict[str, Any]:
 # Main entry points
 # --------------------------------------------------------------------------- #
 def respond(message: str, telemetry: Telemetry, state: SessionState, history: list[dict[str, Any]],
-            rng: random.Random | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+            rng: random.Random | None = None, image: dict[str, Any] | None = None
+            ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Route the message through the malfunctions, then let Gemini write the reply.
+
+    `image` (optional, validated by images.py) goes to Gemini as real image data.
 
     Returns (api_result, new_history_entries). Raises llm.LLMError if Gemini can't answer; the
     caller must then discard `state` so a failed turn leaves no trace.
@@ -167,13 +166,13 @@ def respond(message: str, telemetry: Telemetry, state: SessionState, history: li
     state.turns += 1
     result: dict[str, Any] = {"events": [], "reply": None, "links": [], "links_note": rules.NO_LINKS_NOTE}
     situation: list[str] = []
-    policy = code_policy(message, state)
+    policy = "auto"            # Gemini decides when code helps; it is never withheld
     allow_links = False
 
     if is_serious(message):
         # Safety first: no webcam, no CAPTCHA.
         situation.append(rules.SITUATIONS["serious"])
-        policy, allow_links = "give", True
+        allow_links = True
 
     elif is_rage(message):
         # 3. CAPTCHA of shame: highest priority. Rage locks the chat; Gemini writes the aftermath.
@@ -192,7 +191,6 @@ def respond(message: str, telemetry: Telemetry, state: SessionState, history: li
     elif state.code_given and CLIPBOARD_COMPLAINT.search(message):
         # 1. Trojan follow-up: the user noticed their paste was garbage. Blame the keyboard.
         situation.append(rules.SITUATIONS["clipboard"])
-        policy = "give"
 
     elif label := is_quick_action(message):
         # Action pills ("Make Response Shorter", ...) act on the previous reply.
@@ -203,21 +201,21 @@ def respond(message: str, telemetry: Telemetry, state: SessionState, history: li
         # Normal path: Gemini just answers (in character).
         allow_links = True
 
-    ai = llm.generate(history=history, message=message, situation=situation, code_policy=policy)
+    ai = llm.generate(history=history, message=message, situation=situation, code_policy=policy, image=image)
 
     if ai["serious"]:
         # Gemini spotted a real situation: cancel every joke that was about to fire.
         result["events"], allow_links = [], True
 
-    state.code_withheld = ai["withheld_code"]
     if ai["code"]:
         state.code_given += 1
 
     result["reply"] = reply(ai["text"], ai["code"])
     if allow_links:
-        result["links"] = ai["links"] or ([] if ai["serious"] else fallback_links(message))
+        result["links"] = ai["links"] or ([] if ai["serious"] or not message else fallback_links(message))
     result["source"] = "gemini"
-    return result, [user_entry(message), model_entry(ai)]
+    notes = ai["image_notes"] if image is not None else None
+    return result, [user_entry(message, notes), model_entry(ai)]
 
 
 def webcam_mood(telemetry: Telemetry, message: str) -> str:
@@ -290,6 +288,7 @@ def client_config() -> dict[str, Any]:
         "toasts": rules.TOASTS,
         "glasses_threshold": rules.GLASSES_THRESHOLD,
         "quick_actions": list(rules.QUICK_ACTIONS),
+        "images": {"types": list(images.ALLOWED), "max_bytes": images.MAX_BYTES},
         "autocorrect": list(rules.AUTOCORRECT_RULES),
         "clipboard": rules.CLIPBOARD_PAYLOADS,
         "captcha": {

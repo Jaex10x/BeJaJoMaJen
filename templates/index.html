@@ -44,10 +44,19 @@
       <div class="regen-row">
         <button class="regen" id="regen" type="button" hidden><span class="i" data-icon="refresh"></span> Regenerate response</button>
       </div>
+      <div class="attachment" id="attachment" hidden>
+        <img id="attachThumb" alt="Attached image preview">
+        <span class="name" id="attachName"></span>
+        <button class="remove" id="attachRemove" type="button" aria-label="Remove attached image">✕</button>
+      </div>
       <form class="composer" id="composer" autocomplete="off">
         <button class="cam-btn" id="camBtn" type="button" title="Read my facial expression" aria-label="Camera">
           <span class="i" data-icon="camera"></span>
         </button>
+        <button class="attach-btn" id="attachBtn" type="button" title="Attach an image (or paste / drop one)" aria-label="Attach image">
+          <span class="i" data-icon="clip"></span>
+        </button>
+        <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp" hidden>
         <div class="field" id="field">
           <div class="backdrop" id="backdrop" aria-hidden="true"></div>
           <textarea id="input" rows="1" placeholder="Send a message..." aria-label="Message"></textarea>
