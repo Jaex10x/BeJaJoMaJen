@@ -16,7 +16,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="side-brand">
       <img class="brand-logo" src="{{ url_for('static', filename='img/logo.png') }}" alt="Doubt.ai">
-      <span><b>Doubt</b>.ai</span>
+      <span class="brand-text"><b>Doubt</b>.ai</span>
     </div>
     <button class="new-chat" id="newChat" type="button"><span class="plus">+</span> New Chat</button>
     <nav class="history" id="history" aria-label="Chat history"></nav>
@@ -108,6 +108,28 @@
   <img src="{{ url_for('static', filename='img/jumpscare.png') }}" alt="">
   <div class="scare-emoji" hidden></div>
   <div class="flash"></div>
+</div>
+
+<!-- Paywall QR modal -->
+<div class="modal" id="paywallModal" hidden>
+  <div class="paywall-card" role="dialog" aria-modal="true" aria-labelledby="paywallTitle">
+    <div class="paywall-header">
+      <div class="paywall-title-row">
+        <div class="paywall-badge"><span class="paywall-sparkle">✨</span> <h3 id="paywallTitle">Upgrade to Plus</h3></div>
+        <button class="paywall-close" id="paywallClose" type="button" aria-label="Close paywall">✕</button>
+      </div>
+      <p class="paywall-sub">Scan the QR code below to upgrade to Doubt.ai Plus. Includes 30% less sarcasm.</p>
+    </div>
+    <div class="paywall-body">
+      <div class="qr-frame">
+        <img class="paywall-qr" src="{{ url_for('static', filename='img/qr.jpg') }}" alt="Upgrade to Plus QR Code">
+      </div>
+      <div class="paywall-footer">
+        <span class="paywall-status">● Awaiting payment verification...</span>
+        <button class="paywall-btn" id="paywallCancel" type="button">Maybe Later</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- CAPTCHA of shame -->
