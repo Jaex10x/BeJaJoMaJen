@@ -69,16 +69,20 @@ def test_messages_are_never_rewritten(gemini):
 
 
 # --------------------------------------------------------------------------- #
-# No more "ask nicely" gate: answers (and code) come immediately
+# The "ask nicely" code gate
 # --------------------------------------------------------------------------- #
-def test_code_is_never_withheld(gemini):
-    gemini.queue.append(reply_json("bro discovered CSS centering 😭", code={"lang": "css", "content": "a{}"}))
-    out, _ = respond("how do I center a div")                    # no please, first ask
-    assert out["reply"]["code"]["content"] == "a{}"
-    assert engine.llm.CODE_POLICIES["auto"] in gemini.last["message"]
-    assert "ask again" not in gemini.last["message"] and "nicely" not in gemini.last["message"]
-    assert not hasattr(engine, "POLITE") and not hasattr(engine, "code_policy")
-    assert "withheld_code" not in engine.llm.RESPONSE_SCHEMA["properties"]
+def test_code_policy_tease_then_give(gemini):
+    state = engine.SessionState()
+    gemini.queue.append(reply_json("Ask nicely.", withheld_code=True))
+    respond("how do I reverse a string", state)
+    assert "withhold it" in gemini.last["message"]
+    assert state.code_withheld
+
+    respond("how do I reverse a string", state)              # asked again -> unlocked
+    assert "They have earned it" in gemini.last["message"]
+
+    respond("please sort a list", engine.SessionState())       # polite -> unlocked
+    assert "They have earned it" in gemini.last["message"]
 
 
 # --------------------------------------------------------------------------- #

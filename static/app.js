@@ -30,7 +30,6 @@ const ICONS = {
   sparkle: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 2l1.8 5.2L18 9l-5.2 1.8L11 16l-1.8-5.2L4 9l5.2-1.8z"/><path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>',
   refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/></svg>',
-  clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5 12.4 20a5.5 5.5 0 0 1-7.8-7.8l8.6-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.5a1.8 1.8 0 0 1-2.6-2.6l7.9-7.8"/></svg>',
   camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 8a2 2 0 0 1 2-2h2.2l1.4-2h6.8l1.4 2H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.8"/></svg>',
 };
 function icon(name) {
@@ -46,7 +45,6 @@ const dom = {
   led: $("#camLed"), newChat: $("#newChat"), history: $("#history"), links: $("#linksPanel"),
   sidebar: $("#sidebar"), menuBtn: $("#menuBtn"),
   themeToggle: $("#themeToggle"), upgrade: $("#upgrade"), camBtn: $("#camBtn"),
-  attachBtn: $("#attachBtn"), fileInput: $("#fileInput"), attachment: $("#attachment"),
 };
 
 const app = {
@@ -54,7 +52,6 @@ const app = {
   // Issued by the server. The token is the server-SIGNED transcript: we only carry it around,
   // we can't read-modify it, and the displayed messages are never trusted as history.
   conversationId: null, historyToken: null,
-  lastAttachment: null,   // the image sent with the last message (reused by Regenerate / Retry)
 };
 
 const store = {
@@ -67,9 +64,8 @@ async function api(path, body) {
   try {
     res = await fetch(path, {
       method: body ? "POST" : "GET",
-      // FormData (image uploads) sets its own multipart Content-Type.
-      headers: body && !(body instanceof FormData) ? { "Content-Type": "application/json" } : undefined,
-      body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
       credentials: "same-origin",
     });
   } catch {
@@ -117,97 +113,6 @@ const Toast = {
     const t = el("div", `toast ${cls}`, text);
     dom.toasts.append(t);
     setTimeout(() => t.remove(), ms);
-  },
-};
-
-/* --------------------------------------------------------- Image attachments
-   Homework photos, code screenshots... Picked with the 📎 button, pasted (Ctrl+V) or dropped.
-   Big photos are scaled down in the browser first (max 2400 px, JPEG) so uploads stay small;
-   the server re-checks type and size, and only the server talks to Gemini. */
-const Attachment = {
-  current: null,   // {blob, name, url}
-
-  async set(file) {
-    if (!file) return;
-    const types = app.config?.images?.types ?? ["image/png", "image/jpeg", "image/webp"];
-    if (!types.includes(file.type)) {
-      Toast.flash("I only read PNG, JPEG or WebP images. be serious 😭", "", 3000);
-      return;
-    }
-    let blob = file;
-    try { blob = await this.shrink(file); } catch { /* send the original */ }
-    const max = app.config?.images?.max_bytes ?? 4 * 1024 * 1024;
-    if (blob.size > max) {
-      Toast.flash(`That image is too big (max ${Math.floor(max / 1048576)} MB). Try a screenshot.`, "", 3500);
-      return;
-    }
-    this.clear();
-    this.current = { blob, name: file.name || "pasted image", url: URL.createObjectURL(blob) };
-    this.render();
-    dom.input.focus();
-  },
-
-  async shrink(file) {
-    const MAX_SIDE = 2400, TARGET = 2.5 * 1024 * 1024;
-    const bmp = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
-    if (scale === 1 && file.size <= TARGET) { bmp.close?.(); return file; }
-    const c = el("canvas");
-    c.width = Math.round(bmp.width * scale);
-    c.height = Math.round(bmp.height * scale);
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#fff";                          // transparent PNGs -> white, not black
-    ctx.fillRect(0, 0, c.width, c.height);
-    ctx.drawImage(bmp, 0, 0, c.width, c.height);
-    bmp.close?.();
-    const out = await new Promise((resolve) => c.toBlob(resolve, "image/jpeg", 0.88));
-    return out && out.size < file.size ? out : file;
-  },
-
-  /** Hand the attachment to a message (its preview URL now belongs to the chat bubble). */
-  take() {
-    const a = this.current;
-    this.current = null;
-    this.render();
-    return a;
-  },
-
-  clear() {
-    if (this.current) URL.revokeObjectURL(this.current.url);
-    this.current = null;
-    this.render();
-  },
-
-  render() {
-    const a = this.current;
-    dom.attachment.hidden = !a;
-    dom.attachBtn.classList.toggle("has-file", Boolean(a));
-    if (a) {
-      $("#attachThumb").src = a.url;
-      $("#attachName").textContent = a.name;
-    }
-  },
-
-  bind() {
-    dom.attachBtn.addEventListener("click", () => { if (!app.locked) dom.fileInput.click(); });
-    dom.fileInput.addEventListener("change", () => {
-      this.set(dom.fileInput.files?.[0]);
-      dom.fileInput.value = "";
-    });
-    $("#attachRemove").addEventListener("click", () => this.clear());
-    dom.input.addEventListener("paste", (e) => {
-      const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith("image/"));
-      if (!file) return;
-      if (!e.clipboardData.getData("text/plain")) e.preventDefault();
-      this.set(file);
-    });
-    dom.form.addEventListener("dragover", (e) => { e.preventDefault(); dom.form.classList.add("dragging"); });
-    dom.form.addEventListener("dragleave", () => dom.form.classList.remove("dragging"));
-    dom.form.addEventListener("drop", (e) => {
-      e.preventDefault();
-      dom.form.classList.remove("dragging");
-      if (!app.locked) this.set([...(e.dataTransfer?.files || [])].find((f) => f.type.startsWith("image/")));
-    });
   },
 };
 
@@ -861,7 +766,7 @@ function setBusy(on) {
   dom.send.setAttribute("aria-busy", String(on));
 }
 
-function addUserMessage(text, image = null) {
+function addUserMessage(text) {
   const row = el("div", "msg user");
   const card = el("div", "card");
   const textEl = el("span", "text", text);
@@ -870,18 +775,7 @@ function addUserMessage(text, image = null) {
   edit.title = "Edit message";
   edit.setAttribute("aria-label", "Edit message");
   edit.append(icon("pencil"));
-  edit.hidden = !text;   // nothing to edit on an image-only message
-  if (image) {
-    card.classList.add("has-image");
-    const img = el("img", "user-image");
-    img.src = image.url;
-    img.alt = "Attached image";
-    const line = el("div", "row");
-    line.append(textEl, edit);
-    card.append(img, line);
-  } else {
-    card.append(textEl, edit);
-  }
+  card.append(textEl, edit);
   const avatar = el("div", "avatar user");
   avatar.append(icon("user"));
   row.append(card, avatar);
@@ -1011,7 +905,6 @@ function lockChat(on) {
   dom.send.disabled = on;
   dom.regen.disabled = on;
   dom.camBtn.disabled = on;
-  dom.attachBtn.disabled = on;
   document.body.classList.toggle("locked", on);
   if (!on) dom.input.focus();
 }
@@ -1205,9 +1098,7 @@ async function send(override, opts = {}) {
   const fromInput = override == null;
   // One last sneaky autocorrect pass so a trailing "wrong" doesn't escape.
   const text = (fromInput ? Autocorrect.apply(dom.input.value, true).text : override).trim();
-  const reuse = (opts.regenerate || opts.retry) && app.lastUserMsg;
-  if (!text && !reuse && !(fromInput && Attachment.current)) return;
-  const attachment = reuse ? app.lastAttachment : (fromInput ? Attachment.take() : null);
+  if (!text) return;
 
   const telemetry = fromInput ? Telemetry.snapshot() : { keystrokes: 0, backspaces: 0, duration_ms: 0 };
   if (fromInput) {
@@ -1219,25 +1110,20 @@ async function send(override, opts = {}) {
 
   clearActions();
   const isFirst = !History.current;
-  const userMsg = reuse ? app.lastUserMsg : addUserMessage(text, attachment);
+  const reuse = (opts.regenerate || opts.retry) && app.lastUserMsg;
+  const userMsg = reuse ? app.lastUserMsg : addUserMessage(text);
   if (reuse) clearAfter(userMsg);   // the old answer / error goes away
-  if (isFirst) History.start(text || "📎 Image");
+  if (isFirst) History.start(text);
   app.lastPrompt = text;
   app.lastUserMsg = userMsg;
-  app.lastAttachment = attachment;
 
   setBusy(true);
   setTyping(true);
   const started = performance.now();
   try {
-    const payload = { message: text, telemetry, regenerate: Boolean(opts.regenerate), ...conversationPayload() };
-    let body = payload;
-    if (attachment) {   // multipart: the image travels as a real file, not as text
-      body = new FormData();
-      body.append("payload", JSON.stringify(payload));
-      body.append("image", attachment.blob, attachment.name);
-    }
-    const data = await api("/api/chat", body);
+    const data = await api("/api/chat", {
+      message: text, telemetry, regenerate: Boolean(opts.regenerate), ...conversationPayload(),
+    });
     syncConversation(data);
 
     for (const evt of data.events || []) {
@@ -1262,8 +1148,7 @@ async function send(override, opts = {}) {
     setTyping(false);
     syncConversation(err.data);
     // Retry keeps the regenerate flag, so a failed "Regenerate" still replaces the old answer.
-    const pointless = err.status === 400 || err.status === 413;   // bad input: retrying won't help
-    addErrorMessage(err, pointless ? null : () => send(text, { ...opts, retry: true }));
+    addErrorMessage(err, err.status === 400 ? null : () => send(text, { ...opts, retry: true }));
   } finally {
     setBusy(false);
   }
@@ -1309,9 +1194,6 @@ function resetChat() {
   app.thread = null;
   app.lastPrompt = null;
   app.lastUserMsg = null;
-  if (app.lastAttachment) URL.revokeObjectURL(app.lastAttachment.url);
-  app.lastAttachment = null;
-  Attachment.clear();
   app.actionsRow = null;
   History.current = null;
   dom.empty.hidden = false;
@@ -1485,8 +1367,7 @@ function bindChrome() {
   dom.camBtn.addEventListener("pointerenter", () => Glasses.load(), { once: true });
   dom.upgrade.addEventListener("click", () => Toast.flash(app.config.toasts.upgrade));
   dom.menuBtn.addEventListener("click", () => dom.sidebar.classList.toggle("open"));
-  dom.regen.addEventListener("click", () => { if (app.lastUserMsg) send(app.lastPrompt ?? "", { regenerate: true }); });
-  Attachment.bind();
+  dom.regen.addEventListener("click", () => { if (app.lastPrompt) send(app.lastPrompt, { regenerate: true }); });
 
   dom.newChat.addEventListener("click", async () => {
     if (app.busy || app.locked) return;

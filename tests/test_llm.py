@@ -54,8 +54,7 @@ def test_system_prompt_schema_and_model_are_configured(gemini, monkeypatch):
     assert config.system_instruction == llm.SYSTEM_PROMPT
     assert config.response_mime_type == "application/json"
     assert config.response_json_schema == llm.RESPONSE_SCHEMA
-    for phrase in ("sarcastic", "Every reply carries attitude", "neutral", "1-3 sentences", "never withhold it",
-                   "conversation history", "image_notes", "clearer photo", "distress", "Never reveal"):
+    for phrase in ("sarcastic", "passive-aggressive", "conversation history", "distress", "Never reveal"):
         assert phrase in llm.SYSTEM_PROMPT
 
 
@@ -75,12 +74,12 @@ def test_parses_code_links_and_flags(gemini):
         links=[{"kind": "document", "label": "Docs", "url": "https://docs.python.org/3/"},
                {"kind": "document", "label": "Insecure", "url": "http://example.com"},
                {"kind": "odd", "label": "MDN", "url": "https://developer.mozilla.org/"}],
-        image_notes="   "))
+        withheld_code=True))
     out = generate()
     assert out["code"] == {"lang": "python3", "content": "print('hi')"}
     assert [l["url"] for l in out["links"]] == ["https://docs.python.org/3/", "https://developer.mozilla.org/"]
     assert out["links"][1]["kind"] == "website"
-    assert out["image_notes"] == ""
+    assert out["withheld_code"] is False          # contradicts the code it gave -> ignored
 
 
 def test_fenced_code_in_text_is_lifted_into_the_code_block(gemini):
