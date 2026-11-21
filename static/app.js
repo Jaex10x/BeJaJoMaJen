@@ -32,6 +32,7 @@ const ICONS = {
   user: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z"/></svg>',
   clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5 12.4 20a5.5 5.5 0 0 1-7.8-7.8l8.6-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.5a1.8 1.8 0 0 1-2.6-2.6l7.9-7.8"/></svg>',
   camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3 8a2 2 0 0 1 2-2h2.2l1.4-2h6.8l1.4 2H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.8"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
 };
 function icon(name) {
   const span = el("span", "i");
@@ -43,7 +44,7 @@ const dom = {
   chat: $("#chat"), empty: $("#empty"), suggestions: $("#suggestions"),
   form: $("#composer"), input: $("#input"), send: $("#send"), regen: $("#regen"),
   backdrop: $("#backdrop"), badge: $("#toneBadge"), toasts: $("#toastZone"),
-  led: $("#camLed"), newChat: $("#newChat"), history: $("#history"), links: $("#linksPanel"),
+  led: $("#camLed"), newChat: $("#newChat"), history: $("#history"), clearHistory: $("#clearHistory"), links: $("#linksPanel"),
   sidebar: $("#sidebar"), menuBtn: $("#menuBtn"),
   themeToggle: $("#themeToggle"), upgrade: $("#upgrade"), camBtn: $("#camBtn"),
   attachBtn: $("#attachBtn"), fileInput: $("#fileInput"), attachment: $("#attachment"),
@@ -730,16 +731,23 @@ const Screenshot = {
 /* ------------------------------------------------------------ History (sidebar) */
 const History = {
   KEY: "doubt.history",
+  DELETED_KEY: "doubt.deleted_seeds",
   items: [],
   current: null,
+  deleted: new Set(),
 
   load() {
     const raw = store.get(this.KEY, []);
     this.items = Array.isArray(raw)
       ? raw.filter((x) => x && typeof x.title === "string").slice(0, 15).map((x) => ({ title: x.title.slice(0, 120) }))
       : [];
+    const del = store.get(this.DELETED_KEY, []);
+    this.deleted = new Set(Array.isArray(del) ? del : []);
   },
-  save() { store.set(this.KEY, this.items); },
+  save() {
+    store.set(this.KEY, this.items);
+    store.set(this.DELETED_KEY, Array.from(this.deleted));
+  },
 
   start(title) {
     this.current = { title };
@@ -749,26 +757,61 @@ const History = {
     this.render();
   },
 
+  delete(title) {
+    this.items = this.items.filter((x) => x.title !== title);
+    this.deleted.add(title);
+    if (this.current?.title === title) this.current = null;
+    this.save();
+    this.render();
+    Toast.flash("Conversation deleted.");
+  },
+
+  clearAll() {
+    this.items = [];
+    for (const s of (app.config.history_seed || [])) this.deleted.add(s.title);
+    this.current = null;
+    this.save();
+    this.render();
+    Toast.flash("Chat history cleared.");
+  },
+
   render() {
     const groups = new Map();
     if (this.items.length) groups.set("Today", this.items.map((i) => i.title));
-    for (const s of app.config.history_seed) {
+    for (const s of app.config.history_seed || []) {
+      if (this.deleted.has(s.title)) continue;
       if (!groups.has(s.group)) groups.set(s.group, []);
       groups.get(s.group).push(s.title);
     }
     const nodes = [];
+    if (!groups.size) {
+      nodes.push(el("div", "history-empty", "No chat history"));
+    }
     for (const [name, titles] of groups) {
       nodes.push(el("h3", "", name));
       for (const title of titles) {
+        const row = el("div", "history-row");
         const btn = el("button", "history-item");
         btn.type = "button";
         btn.title = title;
-        btn.append(icon("chat"), el("span", "", title));
+        btn.append(icon("chat"), el("span", "history-title", title));
         btn.addEventListener("click", () => {
           Toast.flash(app.config.toasts.history);
           dom.sidebar.classList.remove("open");
         });
-        nodes.push(btn);
+
+        const delBtn = el("button", "history-del");
+        delBtn.type = "button";
+        delBtn.title = `Delete "${title}"`;
+        delBtn.setAttribute("aria-label", `Delete "${title}"`);
+        delBtn.append(icon("trash"));
+        delBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.delete(title);
+        });
+
+        row.append(btn, delBtn);
+        nodes.push(row);
       }
     }
     dom.history.replaceChildren(...nodes);
@@ -1495,6 +1538,7 @@ function bindChrome() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && paywall && !paywall.hidden) closePaywall();
   });
+  dom.clearHistory?.addEventListener("click", () => History.clearAll());
   dom.menuBtn.addEventListener("click", () => dom.sidebar.classList.toggle("open"));
   dom.regen.addEventListener("click", () => { if (app.lastUserMsg) send(app.lastPrompt ?? "", { regenerate: true }); });
   Attachment.bind();
