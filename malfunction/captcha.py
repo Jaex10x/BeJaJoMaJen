@@ -1,4 +1,4 @@
-"""Mechanic 4, stage 2: a deliberately obscure (but solvable) regex puzzle, verified server-side.
+"""Mechanic 3, stage 2: a deliberately obscure (but solvable) regex puzzle, verified server-side.
 
 Safety: user-supplied patterns run with Python's backtracking `re` engine, so a nasty pattern
 could backtrack exponentially. We cap pattern length and keep every test string <= 10 chars,

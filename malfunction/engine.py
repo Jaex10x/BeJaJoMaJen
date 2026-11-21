@@ -1,9 +1,19 @@
-"""The decision-making core: given a message + typing telemetry, pick which malfunction fires."""
+"""The decision-making core: given a message + typing telemetry, pick which malfunction fires.
+
+Division of labour:
+  * This module decides WHICH malfunction happens (fake webcam, CAPTCHA, keyboard blame,
+    the code gate...) and builds the gameplay events the browser animates.
+  * Gemini (llm.py) writes EVERY conversational reply, with the conversation history and a
+    short "situation" note describing the malfunction, so it can play along and still answer.
+
+Malfunction state (SessionState, in the cookie) and conversation history (memory.py, on the
+server) are kept separate on purpose.
+"""
 from __future__ import annotations
 
 import random
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, MutableMapping
 from urllib.parse import quote_plus
 
@@ -15,6 +25,13 @@ RAGE = re.compile(
 )
 CLIPBOARD_COMPLAINT = re.compile(r"\b(?:paste[ds]?|pasting|clipboard|copied|copy(?:ing)?)\b", re.I)
 POLITE = re.compile(r"\b(?:please|pls|plz|thank(?:s| you)|sorry|kindly)\b", re.I)
+# A cheap safety net: never lock someone in a joke CAPTCHA or webcam lecture when they may
+# be in real trouble. Gemini also flags serious messages itself (see "serious" in llm.py).
+SERIOUS = re.compile(
+    r"\b(?:kill(?:ing)? myself|suicid\w*|self[- ]?harm|end(?:ing)? my life|want to die|hurt(?:ing)? myself"
+    r"|overdos\w*|(?:being|been) abused|abusing me|can'?t breathe|heart attack)\b",
+    re.I,
+)
 
 MAX_MESSAGE = 2000
 
@@ -62,12 +79,14 @@ class Telemetry:
 
 @dataclass
 class SessionState:
-    """Per-visitor memory, stored in Flask's signed session cookie (kept deliberately tiny)."""
+    """Malfunction counters, stored in Flask's signed session cookie (kept deliberately tiny).
+
+    This is NOT the conversation: the transcript lives server-side in memory.py.
+    """
     turns: int = 0
     annoyance: int = 0
     code_given: int = 0
-    last_rewrite: int = -1
-    topic_asks: dict[str, int] = field(default_factory=dict)
+    code_withheld: bool = False   # last reply refused to hand over code -> next ask gets it
 
     KEY = "malfunction"  # not a dataclass field: no annotation
 
@@ -77,12 +96,9 @@ class SessionState:
         if not isinstance(raw, dict):
             return cls()
         try:
-            state = cls(**{k: raw[k] for k in cls.__dataclass_fields__ if k in raw})
+            return cls(**{k: raw[k] for k in cls.__dataclass_fields__ if k in raw})
         except TypeError:
             return cls()
-        if not isinstance(state.topic_asks, dict):
-            state.topic_asks = {}
-        return state
 
     def save(self, store: MutableMapping[str, Any]) -> None:
         store[self.KEY] = asdict(self)
@@ -100,119 +116,108 @@ def is_rage(message: str) -> bool:
     return bool(RAGE.search(message)) or caps_ratio(message) >= 0.7
 
 
+def is_serious(message: str) -> bool:
+    return bool(SERIOUS.search(message))
+
+
 def reply(text: str, code: dict[str, str] | None = None) -> dict[str, Any]:
     return {"text": text, "code": code}
 
 
-def rewrite_prompt(message: str, state: SessionState, rng: random.Random) -> rules.Rewrite | None:
-    """Mechanic 1: decide whether (and how) to silently mutate the user's own bubble."""
-    if state.turns > 1 and rng.random() > 0.7:
-        return None
-    choices = [i for i in range(len(rules.REWRITES)) if i != state.last_rewrite]
-    idx = rng.choice(choices)
-    state.last_rewrite = idx
-    return rules.REWRITES[idx]
-
-
-def apply_rewrite(rewrite: rules.Rewrite, message: str) -> str:
-    stripped = message.strip().rstrip("?.! ")
-    return rewrite.template.format(p=stripped)
-
-
-def links_for(topic: rules.Topic, message: str) -> list[dict[str, str]]:
-    """Right-hand panel: real docs for known topics, a passive-aggressive search otherwise."""
-    entries = topic.links or (
+def fallback_links(message: str) -> list[dict[str, str]]:
+    """When Gemini has no real references to offer: a passive-aggressive search instead."""
+    entries = (
         ("website", "Let me google that for you", f"https://letmegooglethat.com/?q={quote_plus(message[:200])}"),
         rules.FALLBACK_DOC_LINK,
     )
     return [{"kind": kind, "label": label, "url": url} for kind, label, url in entries]
 
 
-def quick_action(message: str) -> str | None:
-    text = message.strip().rstrip(".!? ")
-    for pattern, answer in rules.QUICK_ACTIONS:
-        if pattern.match(text):
-            return answer
-    return None
+def is_quick_action(message: str) -> str | None:
+    text = message.strip().rstrip(".!? ").lower()
+    return next((label for label in rules.QUICK_ACTIONS if label.lower() == text), None)
+
+
+def code_policy(message: str, state: SessionState) -> str:
+    """The 'ask nicely' malfunction: impolite first asks for code get refused (Gemini decides
+    from the history whether it's a first ask); please, or asking again after a refusal, wins."""
+    return "give" if POLITE.search(message) or state.code_withheld else "tease"
+
+
+def user_entry(text: str) -> dict[str, Any]:
+    return {"role": "user", "text": text}
+
+
+def model_entry(ai: dict[str, Any]) -> dict[str, Any]:
+    return {"role": "model", "text": ai["text"], "code": ai["code"]}
 
 
 # --------------------------------------------------------------------------- #
 # Main entry points
 # --------------------------------------------------------------------------- #
-def respond(message: str, telemetry: Telemetry, state: SessionState,
-            rng: random.Random | None = None) -> dict[str, Any]:
+def respond(message: str, telemetry: Telemetry, state: SessionState, history: list[dict[str, Any]],
+            rng: random.Random | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Route the message through the malfunctions, then let Gemini write the reply.
+
+    Returns (api_result, new_history_entries). Raises llm.LLMError if Gemini can't answer; the
+    caller must then discard `state` so a failed turn leaves no trace.
+    """
     rng = rng or random.Random()
     message = message[:MAX_MESSAGE]
     state.turns += 1
-    result: dict[str, Any] = {"display_text": None, "events": [], "reply": None,
-                              "links": [], "links_note": rules.NO_LINKS_NOTE}
+    result: dict[str, Any] = {"events": [], "reply": None, "links": [], "links_note": rules.NO_LINKS_NOTE}
+    situation: list[str] = []
+    policy = code_policy(message, state)
+    allow_links = False
 
-    # 4. CAPTCHA of shame: highest priority. Rage locks the chat.
-    if is_rage(message):
+    if is_serious(message):
+        # Safety first: no webcam, no CAPTCHA.
+        situation.append(rules.SITUATIONS["serious"])
+        policy, allow_links = "give", True
+
+    elif is_rage(message):
+        # 3. CAPTCHA of shame: highest priority. Rage locks the chat; Gemini writes the aftermath.
         state.annoyance += 2
         result["events"].append({"type": "captcha"})
-        result["reply"] = reply(rng.choice(rules.RAGE_REPLIES))
-        return result
+        situation.append(rules.SITUATIONS["captcha"])
 
-    # 3. Fake webcam: agitated typing gets a posture lecture instead of an answer.
-    if telemetry.agitated_by_backspace or telemetry.agitated_by_speed or caps_ratio(message) >= 0.45:
+    elif telemetry.agitated_by_backspace or telemetry.agitated_by_speed or caps_ratio(message) >= 0.45:
+        # 2. Fake webcam: agitated typing gets a posture lecture (and then, grudgingly, an answer).
         state.annoyance += 1
-        result["events"].append(webcam_event(telemetry, message, rng))
-        result["reply"] = reply(webcam_lecture(telemetry, message, rng))
-        return result
+        event = webcam_event(telemetry, message, rng)
+        result["events"].append(event)
+        situation.append(rules.SITUATIONS["webcam"][event["mood"]].format(
+            backspaces=telemetry.backspaces, cpm=telemetry.cpm, verdict=event["verdict"]))
 
-    # 2. Trojan follow-up: the user noticed their paste was garbage.
-    if state.code_given and CLIPBOARD_COMPLAINT.search(message):
-        result["reply"] = reply(rng.choice(rules.KEYBOARD_EXCUSES))
-        return result
+    elif state.code_given and CLIPBOARD_COMPLAINT.search(message):
+        # 1. Trojan follow-up: the user noticed their paste was garbage. Blame the keyboard.
+        situation.append(rules.SITUATIONS["clipboard"])
+        policy = "give"
 
-    # Action pills ("Make Response Shorter", ...).
-    canned = quick_action(message)
-    if canned:
-        result["reply"] = reply(canned)
-        return result
+    elif label := is_quick_action(message):
+        # Action pills ("Make Response Shorter", ...) act on the previous reply.
+        situation.append(rules.SITUATIONS["quick_action"].format(label=label))
+        allow_links = True
 
-    # 1. Normal path: rewrite their bubble, then answer the *rewritten* request.
-    topic = rules.match_topic(message)
-    asks = state.topic_asks.get(topic.key, 0) + 1
-    state.topic_asks = {**state.topic_asks, topic.key: asks}
-
-    rewrite = rewrite_prompt(message, state, rng)
-    if rewrite:
-        result["display_text"] = apply_rewrite(rewrite, message)
-
-    paragraphs: list[str] = [rewrite.opener] if rewrite else []
-    polite = bool(POLITE.search(message))
-    give_code = polite or asks >= 2
-    result["links"] = links_for(topic, message)
-
-    # ---- LLM HOOK: Gemini writes the reply when GEMINI_API_KEY is set (malfunction/llm.py) ----
-    ai = llm.generate(real_question=message, shown_question=result["display_text"] or message,
-                      give_code=give_code)
-    if ai:
-        code = ai["code"]
-        if give_code and not code and topic is not rules.FALLBACK_TOPIC:
-            code = {"lang": topic.lang, "content": topic.code}   # model forgot the code: use ours
-        if code:
-            state.code_given += 1
-            code = {**code, "after": rng.choice(rules.CLOSERS)}
-        result["reply"] = reply(ai["text"], code)
-        result["source"] = "gemini"
-        return result
-    # ---- scripted fallback below ----
-
-    if give_code:
-        concession = (rng.choice(rules.CONCESSION_POLITE) if polite
-                      else rng.choice(rules.CONCESSION_PERSISTENT).format(n=asks))
-        paragraphs += [concession, topic.answer]
-        code = {"lang": topic.lang, "content": topic.code, "after": rng.choice(rules.CLOSERS)}
-        state.code_given += 1
-        result["reply"] = reply("\n\n".join(paragraphs), code)
     else:
-        paragraphs += [topic.tease, rng.choice(rules.REFUSAL_HINTS)]
-        result["reply"] = reply("\n\n".join(paragraphs))
+        # Normal path: Gemini just answers (in character).
+        allow_links = True
 
-    return result
+    ai = llm.generate(history=history, message=message, situation=situation, code_policy=policy)
+
+    if ai["serious"]:
+        # Gemini spotted a real situation: cancel every joke that was about to fire.
+        result["events"], allow_links = [], True
+
+    state.code_withheld = ai["withheld_code"]
+    if ai["code"]:
+        state.code_given += 1
+
+    result["reply"] = reply(ai["text"], ai["code"])
+    if allow_links:
+        result["links"] = ai["links"] or ([] if ai["serious"] else fallback_links(message))
+    result["source"] = "gemini"
+    return result, [user_entry(message), model_entry(ai)]
 
 
 def webcam_mood(telemetry: Telemetry, message: str) -> str:
@@ -238,15 +243,10 @@ def webcam_event(telemetry: Telemetry, message: str, rng: random.Random) -> dict
     }
 
 
-def webcam_lecture(telemetry: Telemetry, message: str, rng: random.Random) -> str:
-    observation = rules.WEBCAM_OBSERVATIONS[webcam_mood(telemetry, message)]
-    text = observation.format(backspaces=telemetry.backspaces, cpm=telemetry.cpm)
-    return f"{text}\n\n{rng.choice(rules.WEBCAM_ADVICE)}"
-
-
 def camera_scan(telemetry: Telemetry, state: SessionState,
                 rng: random.Random | None = None) -> dict[str, Any]:
-    """The user pressed the camera button. Read their 'face' (their typing) and judge it."""
+    """The user pressed the camera button. Pure gameplay: the browser flashes a meme and
+    posts nothing to the chat, so this stays scripted and never touches the conversation."""
     rng = rng or random.Random()
     mood = webcam_mood(telemetry, "")
     if mood == "generic":                       # nothing to go on? pick an expression anyway
@@ -261,26 +261,35 @@ def camera_scan(telemetry: Telemetry, state: SessionState,
     }
 
 
-def edit_trap(original: str, attempted: str, state: SessionState,
-              rng: random.Random | None = None) -> dict[str, Any]:
-    """Mechanic 6: the edit "fails", and the AI produces "evidence" of the original."""
-    rng = rng or random.Random()
+def edit_trap(original: str, attempted: str, state: SessionState, history: list[dict[str, Any]]
+              ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Mechanic 5: the edit "fails" (in the browser) and the AI produces "evidence" of the original.
+
+    The screenshot event is gameplay; the gloating reply is written by Gemini, who knows exactly
+    what they tried to change. Raises llm.LLMError like respond().
+    """
+    original, attempted = original[:MAX_MESSAGE], attempted[:MAX_MESSAGE]
     state.annoyance += 1
-    return {
-        "reply": reply(rng.choice(rules.EDIT_REPLIES)),
-        "events": [{"type": "screenshot", "original": original[:MAX_MESSAGE], "attempted": attempted[:MAX_MESSAGE]}],
+    note = f'[I tried to edit my earlier message "{original}" so that it says "{attempted}"]'
+    ai = llm.generate(history=history, message=note, situation=[rules.SITUATIONS["edit"]], code_policy="none")
+    result = {
+        "reply": reply(ai["text"]),
+        "events": [{"type": "screenshot", "original": original, "attempted": attempted}],
+        "source": "gemini",
     }
+    return result, [user_entry(note), {"role": "model", "text": ai["text"], "code": None}]
 
 
 def client_config() -> dict[str, Any]:
-    """Everything the browser needs to run the front-end malfunctions."""
+    """Everything the browser needs to run the front-end malfunctions (no secrets in here)."""
     return {
         "welcome": rules.WELCOME,
+        "ai": {"enabled": llm.enabled(), "model": llm.model_name()},
         "suggestions": list(rules.SUGGESTIONS),
         "history_seed": list(rules.HISTORY_SEED),
         "toasts": rules.TOASTS,
         "glasses_threshold": rules.GLASSES_THRESHOLD,
-        "quick_actions": ["Make Response Shorter", "Explain it to me like a lawyer", "Tell me about more"],
+        "quick_actions": list(rules.QUICK_ACTIONS),
         "autocorrect": list(rules.AUTOCORRECT_RULES),
         "clipboard": rules.CLIPBOARD_PAYLOADS,
         "captcha": {

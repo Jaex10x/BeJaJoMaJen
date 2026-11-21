@@ -2,12 +2,11 @@
 
 /* ==========================================================================
    Doubt.ai front-end. Each malfunction is a small self-contained module:
-     1. Prompt rewriting      -> send() swaps the user bubble with display_text
-     2. Clipboard trojan      -> Trojan
-     3. Fake webcam           -> Telemetry + Webcam
-     4. CAPTCHA of shame      -> Captcha
-     5. Autocorrect sabotage  -> Autocorrect
-     6. Edit-message trap     -> EditTrap + Screenshot
+     1. Clipboard trojan      -> Trojan
+     2. Fake webcam           -> Telemetry + Webcam
+     3. CAPTCHA of shame      -> Captcha
+     4. Autocorrect sabotage  -> Autocorrect
+     5. Edit-message trap     -> EditTrap + Screenshot
    UI chrome: History (sidebar), Links (right panel), Theme, Models, Regenerate.
    ========================================================================== */
 
@@ -48,7 +47,12 @@ const dom = {
   themeToggle: $("#themeToggle"), upgrade: $("#upgrade"), camBtn: $("#camBtn"),
 };
 
-const app = { config: null, busy: false, locked: false, thread: null, lastPrompt: null, lastUserMsg: null, actionsRow: null };
+const app = {
+  config: null, busy: false, locked: false, thread: null, lastPrompt: null, lastUserMsg: null, actionsRow: null,
+  // Issued by the server. The token is the server-SIGNED transcript: we only carry it around,
+  // we can't read-modify it, and the displayed messages are never trusted as history.
+  conversationId: null, historyToken: null,
+};
 
 const store = {
   get(key, fallback) { try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } },
@@ -56,15 +60,51 @@ const store = {
 };
 
 async function api(path, body) {
-  const res = await fetch(path, {
-    method: body ? "POST" : "GET",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: "same-origin",
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method: body ? "POST" : "GET",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: "same-origin",
+    });
+  } catch {
+    const err = new Error("Can't reach the Doubt.ai server. Is `python app.py` still running?");
+    err.code = "server_unreachable";
+    throw err;
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.code = data.error_code || `http_${res.status}`;
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
   return data;
+}
+
+/** Keep our conversation id in step with the server's (it may have issued a new one). */
+function syncConversation(data) {
+  if (data?.conversation_id && data.conversation_id !== app.conversationId) {
+    app.conversationId = data.conversation_id;
+    app.historyToken = null;
+  }
+  if (data?.history_token) app.historyToken = data.history_token;
+  if (data?.memory_reset) Toast.flash("🧠 My memory of this chat expired, so I'm starting fresh from here.", "", 4000);
+}
+
+function conversationPayload() {
+  return { conversation_id: app.conversationId, history_token: app.historyToken };
+}
+
+/** Start a clean conversation on the server (New chat, page load). */
+async function startConversation() {
+  app.conversationId = null;
+  app.historyToken = null;
+  try {
+    syncConversation(await api("/api/reset", {}));
+  } catch { /* the first /api/chat will get a fresh id anyway */ }
 }
 
 /* ------------------------------------------------------------------- Toasts */
@@ -76,7 +116,7 @@ const Toast = {
   },
 };
 
-/* ---------------------------------------------------------------- 2. Trojan */
+/* ---------------------------------------------------------------- 1. Trojan */
 const Trojan = {
   copies: 0,
   pendingLang: "",
@@ -145,7 +185,7 @@ const Trojan = {
   },
 };
 
-/* ------------------------------------------------------------- 5. Autocorrect */
+/* ------------------------------------------------------------- 4. Autocorrect */
 const Autocorrect = {
   rules: [],
   applied: new Set(),
@@ -207,7 +247,7 @@ const Autocorrect = {
   },
 };
 
-/* --------------------------------------------------------------- 3. Telemetry */
+/* --------------------------------------------------------------- 2. Telemetry */
 const Telemetry = {
   data: null,
   reset() { this.data = { keystrokes: 0, backspaces: 0, startedAt: 0 }; },
@@ -320,7 +360,7 @@ const Glasses = {
   },
 };
 
-/* ------------------------------------------------------------------ 3. Webcam */
+/* ------------------------------------------------------------------ 2. Webcam */
 const Webcam = {
   win: $("#camWindow"),
   snapshot: null,   // what the last scan "saw": {src} for a real image, {emoji} otherwise
@@ -508,7 +548,7 @@ const Webcam = {
   },
 };
 
-/* ------------------------------------------------------------- 6. Screenshot */
+/* ------------------------------------------------------------- 5. Screenshot */
 const Screenshot = {
   wrap(ctx, text, maxWidth, maxLines = 8) {
     const lines = [];
@@ -613,12 +653,6 @@ const History = {
     this.save();
     this.render();
   },
-  rename(title) {
-    if (!this.current) return;
-    this.current.title = title;   // the history remembers the *rewritten* prompt, naturally
-    this.save();
-    this.render();
-  },
 
   render() {
     const groups = new Map();
@@ -694,6 +728,44 @@ function clearActions() {
   app.actionsRow = null;
 }
 
+/** Gemini text -> DOM: `inline code` becomes <code>, stray **bold** markers are dropped.
+ *  Built with text nodes only (never innerHTML), so model output can't inject markup. */
+function renderInline(parent, text) {
+  const clean = text.replace(/\*\*(.+?)\*\*/g, "$1");
+  for (const part of clean.split(/(`[^`\n]+`)/g)) {
+    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) parent.append(el("code", "inline", part.slice(1, -1)));
+    else if (part) parent.append(document.createTextNode(part));
+  }
+}
+
+/** A REAL failure (Gemini down, bad key, rate limit...). Styled differently so it's never
+ *  mistaken for the act, and never a made-up reply. */
+function addErrorMessage(err, retry) {
+  const row = el("div", "msg bot error");
+  const card = el("div", "card");
+  row.append(el("div", "avatar bot", "!"), card);
+  card.append(el("p", "error-title", "Actual malfunction (not part of the joke)"), el("p", "", err.message));
+  if (retry) {
+    const b = el("button", "retry-btn", err.code === "rate_limited" ? "Retry (wait a few seconds first)" : "Retry");
+    b.type = "button";
+    b.addEventListener("click", () => { if (!app.busy && !app.locked) retry(); });
+    card.append(b);
+  }
+  ensureThread().append(row);
+  scrollDown();
+}
+
+/** Remove everything shown after a user message (old reply / error) before re-asking. */
+function clearAfter(userMsg) {
+  while (userMsg?.row?.nextSibling) userMsg.row.nextSibling.remove();
+}
+
+function setBusy(on) {
+  app.busy = on;
+  document.body.classList.toggle("busy", on);
+  dom.send.setAttribute("aria-busy", String(on));
+}
+
 function addUserMessage(text) {
   const row = el("div", "msg user");
   const card = el("div", "card");
@@ -723,7 +795,12 @@ function addBotMessage(reply, extras = {}) {
   const card = el("div", "card");
   row.append(el("div", "avatar bot", "D"), card);
 
-  for (const para of (reply.text || "").split(/\n{2,}/)) card.append(el("p", "", para));
+  for (const para of (reply.text || "").split(/\n{2,}/)) {
+    if (!para.trim()) continue;
+    const p = el("p");
+    renderInline(p, para);
+    card.append(p);
+  }
 
   if (reply.code) {
     const { lang, content, after } = reply.code;
@@ -832,7 +909,7 @@ function lockChat(on) {
   if (!on) dom.input.focus();
 }
 
-/* ------------------------------------------------------------ 6. Edit trap */
+/* ------------------------------------------------------------ 5. Edit trap */
 const EditTrap = {
   start(msg) {
     if (msg.editing || app.locked || app.busy) return;
@@ -864,7 +941,11 @@ const EditTrap = {
 
       // Let them believe it worked...
       msg.textEl.replaceChildren(document.createTextNode(attempted), el("span", "edited-tag", "(edited)"));
-      app.busy = true;
+      setBusy(true);
+      clearActions();
+      // Gemini writes the gloating while the fake edit plays out.
+      const request = api("/api/edit", { original, attempted, ...conversationPayload() });
+      request.catch(() => {});   // handled below; avoids an unhandled-rejection warning meanwhile
       await sleep(1100);
       // ...then glitch back to the original.
       msg.card.classList.add("glitch");
@@ -874,21 +955,23 @@ const EditTrap = {
 
       setTyping(true);
       try {
-        const data = await api("/api/edit", { original, attempted });
-        await sleep(1200);
+        const data = await request;
+        syncConversation(data);
         setTyping(false);
         addBotMessage(data.reply, { screenshotOf: original });
+        addActions();
       } catch (err) {
         setTyping(false);
-        addBotMessage({ text: `Edit failed successfully. (${err.message})` });
+        syncConversation(err.data);
+        addErrorMessage(err);
       } finally {
-        app.busy = false;
+        setBusy(false);
       }
     });
   },
 };
 
-/* ---------------------------------------------------------- 4. CAPTCHA */
+/* ---------------------------------------------------------- 3. CAPTCHA */
 const Captcha = {
   modal: $("#captcha"),
   card: $(".captcha-card"),
@@ -1001,11 +1084,14 @@ const Captcha = {
 };
 
 /* ------------------------------------------------------------- Send flow */
-function typingDelay(text) { return Math.min(600 + (text?.length ?? 0) * 12, 2600); }
+// The model's real latency already feels like typing; only top it up for very fast replies.
+function typingDelay(text, elapsedMs) { return Math.max(0, Math.min(500 + (text?.length ?? 0) * 4, 1400) - elapsedMs); }
 
 /**
- * @param {string} [override]  text from a suggestion card / action pill / regenerate
- * @param {{regenerate?: boolean}} [opts]
+ * @param {string} [override]  text from a suggestion card / action pill / regenerate / retry
+ * @param {{regenerate?: boolean, retry?: boolean}} [opts]
+ *   regenerate: ask again for the last message, replacing the previous answer (server drops it too)
+ *   retry:      resend the last message after an error (nothing was stored for it)
  */
 async function send(override, opts = {}) {
   if (app.locked || app.busy) return;
@@ -1024,21 +1110,21 @@ async function send(override, opts = {}) {
 
   clearActions();
   const isFirst = !History.current;
-  const userMsg = opts.regenerate && app.lastUserMsg ? app.lastUserMsg : addUserMessage(text);
+  const reuse = (opts.regenerate || opts.retry) && app.lastUserMsg;
+  const userMsg = reuse ? app.lastUserMsg : addUserMessage(text);
+  if (reuse) clearAfter(userMsg);   // the old answer / error goes away
   if (isFirst) History.start(text);
   app.lastPrompt = text;
   app.lastUserMsg = userMsg;
 
-  app.busy = true;
+  setBusy(true);
   setTyping(true);
+  const started = performance.now();
   try {
-    const data = await api("/api/chat", { message: text, telemetry });
-
-    // 1. The silent rewrite: what you "said" is now something else.
-    if (data.display_text) {
-      userMsg.setText(data.display_text);
-      if (isFirst) History.rename(data.display_text);
-    }
+    const data = await api("/api/chat", {
+      message: text, telemetry, regenerate: Boolean(opts.regenerate), ...conversationPayload(),
+    });
+    syncConversation(data);
 
     for (const evt of data.events || []) {
       if (evt.type === "webcam") {
@@ -1052,7 +1138,7 @@ async function send(override, opts = {}) {
       }
     }
 
-    await sleep(typingDelay(data.reply?.text));
+    await sleep(typingDelay(data.reply?.text, performance.now() - started));
     setTyping(false);
     addBotMessage(data.reply);
     Links.show(data.links, data.links_note);
@@ -1060,16 +1146,18 @@ async function send(override, opts = {}) {
     dom.regen.hidden = false;
   } catch (err) {
     setTyping(false);
-    addBotMessage({ text: `I'm experiencing a malfunction. A real one this time: ${err.message}` });
+    syncConversation(err.data);
+    // Retry keeps the regenerate flag, so a failed "Regenerate" still replaces the old answer.
+    addErrorMessage(err, err.status === 400 ? null : () => send(text, { ...opts, retry: true }));
   } finally {
-    app.busy = false;
+    setBusy(false);
   }
 }
 
 /** Camera button: real webcam -> detect face -> flash the look-alike picture. Nothing in the chat. */
 async function cameraScan() {
   if (app.locked || app.busy) return;
-  app.busy = true;
+  setBusy(true);
   dom.camBtn.classList.add("active");
   try {
     Glasses.load();   // no await: downloads in the background while the camera starts
@@ -1081,7 +1169,7 @@ async function cameraScan() {
     Toast.flash(`Camera malfunction (a real one): ${err.message}`);
   } finally {
     dom.camBtn.classList.remove("active");
-    app.busy = false;
+    setBusy(false);
   }
 }
 
@@ -1283,7 +1371,7 @@ function bindChrome() {
 
   dom.newChat.addEventListener("click", async () => {
     if (app.busy || app.locked) return;
-    await api("/api/reset", {}).catch(() => {});
+    await startConversation();   // new id, empty history, malfunction counters reset
     resetChat();
     dom.sidebar.classList.remove("open");
     dom.input.focus();
@@ -1311,6 +1399,11 @@ async function boot() {
   History.render();
   renderSuggestions();
   bindChrome();
+  // The page always opens on an empty chat, so the server conversation starts empty too.
+  await startConversation();
+  if (!app.config.ai?.enabled) {
+    addErrorMessage({ message: "Gemini isn't configured on the server, so I can't answer yet. Set GEMINI_API_KEY (see .env.example) and restart." });
+  }
 
   dom.input.addEventListener("keydown", (e) => {
     Telemetry.track(e);

@@ -188,6 +188,21 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .msg.user.editing .edit-btn { display: none; }
 .msg.bot .card { padding: 14px 18px 10px; color: var(--ink); font-size: 12.5px; border-color: transparent; }
 .card p { margin: 0 0 10px; }
+.msg.bot .card p { white-space: pre-line; overflow-wrap: anywhere; }   /* Gemini's line breaks and "- " lists */
+.card code.inline {
+  font: 0.92em var(--mono); background: rgba(0,0,0,.07); padding: 1px 5px; border-radius: 4px;
+}
+:root[data-theme="dark"] .card code.inline { background: rgba(255,255,255,.1); }
+
+/* a REAL error (Gemini/API failure): clearly not part of the act */
+.msg.bot.error .card { background: transparent; border: 1px dashed var(--bad); }
+.msg.bot.error .avatar.bot { background: var(--bad); color: #fff; }
+.msg.bot.error .error-title { font-weight: 600; color: var(--bad); margin-bottom: 2px; }
+.retry-btn {
+  background: var(--olive-800); color: var(--on-olive); border: none; border-radius: 999px;
+  padding: 6px 16px; font-size: 11px; margin-bottom: 6px;
+}
+.retry-btn:hover:not(:disabled) { background: var(--olive-600); }
 .feedback { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 .feedback button { background: none; border: none; padding: 2px; color: var(--olive-800); display: grid; }
 .feedback button.dislike { color: #b9a37a; }
@@ -299,6 +314,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 }
 .send:hover:not(:disabled) { background: var(--olive-600); }
 body.locked .composer { filter: grayscale(1); }
+body.busy .send { cursor: progress; opacity: .6; }
 
 /* ---------- links panel ---------- */
 .links-panel {
