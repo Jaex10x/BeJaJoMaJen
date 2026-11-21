@@ -5,6 +5,7 @@ Run:  python app.py   then open http://localhost:5000
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -15,7 +16,7 @@ load_dotenv()  # reads GEMINI_API_KEY / GEMINI_MODEL / SECRET_KEY from .env (bef
 
 from flask import Flask, jsonify, render_template, request, session  # noqa: E402
 
-from malfunction import captcha, engine, llm, memory  # noqa: E402
+from malfunction import captcha, engine, images, llm, memory  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,13 +30,32 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",
-    MAX_CONTENT_LENGTH=256 * 1024,   # room for the signed history token
+    # Room for an attached image plus the signed history token. (Vercel caps requests at 4.5 MB.)
+    MAX_CONTENT_LENGTH=images.MAX_BYTES + 512 * 1024,
 )
 
 
 def _json_body() -> dict:
     data = request.get_json(silent=True)
     return data if isinstance(data, dict) else {}
+
+
+def _chat_body() -> tuple[dict, object]:
+    """/api/chat takes plain JSON, or multipart/form-data with a JSON "payload" field plus an
+    optional "image" file (that's how the browser sends attachments)."""
+    if request.mimetype == "multipart/form-data":
+        try:
+            data = json.loads(request.form.get("payload") or "{}")
+        except ValueError:
+            data = {}
+        return (data if isinstance(data, dict) else {}), request.files.get("image")
+    return _json_body(), None
+
+
+@app.errorhandler(413)
+def too_large(_err):
+    mb = images.MAX_BYTES // (1024 * 1024)
+    return jsonify(error=f"That upload is too big (max {mb} MB per image).", error_code="image_too_large"), 413
 
 
 def _owner() -> str:
@@ -79,9 +99,13 @@ def config():
 
 @app.post("/api/chat")
 def chat():
-    data = _json_body()
+    data, upload = _chat_body()
     message = str(data.get("message", "")).strip()[:engine.MAX_MESSAGE]
-    if not message:
+    try:
+        image = images.load(upload)
+    except images.ImageError as err:
+        return jsonify(error=err.message, error_code=err.code), err.status
+    if not message and image is None:
         return jsonify(error="Say something. I dare you.", error_code="empty_message"), 400
 
     owner, cid, history, lost = _conversation(data)
@@ -91,7 +115,7 @@ def chat():
     state = engine.SessionState.load(session)
     try:
         result, entries = engine.respond(message, engine.Telemetry.from_payload(data.get("telemetry")),
-                                         state, history)
+                                         state, history, image=image)
     except llm.LLMError as err:
         return _ai_error(err, cid)
     return _finish(result, owner, cid, history, entries, lost, state)

@@ -1,8 +1,10 @@
 # Doubt.ai 🙂
 
 A chat assistant that is *technically* helpful and malfunctions on purpose. Built for a hackathon.
-**Google Gemini is the brain**: it writes every reply, answers any topic, and remembers the
-conversation. The backend is Python (Flask) and decides which malfunction fires. The frontend is
+**Google Gemini is the brain**: it writes every reply, answers any topic, reads images (homework
+photos, screenshots), and remembers the conversation. Its personality is a sarcastic internet friend
+who happens to know things: short, casual replies ("4. revolutionary math."), slang when it fits,
+and real answers and code immediately, with no "ask nicely" gate. The backend is Python (Flask) and decides which malfunction fires. The frontend is
 vanilla JS and performs the tricks. No camera is used unless you click the camera button.
 
 ## Run it
@@ -30,7 +32,7 @@ Run the tests with `pytest`. They mock Gemini, so they need no key and no networ
 
 | # | Malfunction | How to trigger it | Where it lives |
 |---|-------------|-------------------|----------------|
-| 1 | **Copy-paste trojan** | Ask for code. The first impolite ask gets refused; ask again, or say *please*, and Gemini writes the code. Click **Copy** and paste it somewhere. Each copy gives you, in turn: a subtly broken version (Greek-question-mark "semicolons", a missing brace), a "read the docs" comment, or a Rickroll. Then complain that the paste is broken and Gemini blames your keyboard. | `Trojan` in JS (patches `navigator.clipboard.writeText` and the `copy` event), `rules.SITUATIONS["clipboard"]` |
+| 1 | **Copy-paste trojan** | Ask for code (e.g. *"how do I center a div?"*). Click **Copy** and paste it somewhere. Each copy gives you, in turn: a subtly broken version (Greek-question-mark "semicolons", a missing brace), a "read the docs" comment, or a Rickroll. Then complain that the paste is broken and Gemini blames your keyboard. | `Trojan` in JS (patches `navigator.clipboard.writeText` and the `copy` event), `rules.SITUATIONS["clipboard"]` |
 | 2 | **Fake webcam paranoia** | Type a message and press backspace 6+ times, type very fast, or half-shout. A `📷 Reading facial expression...` toast appears, the REC light blinks, and Gemini opens with a posture lecture before answering. No camera permission is ever requested. | `Telemetry`/`Webcam` in JS, `engine.webcam_event`, `rules.SITUATIONS["webcam"]` |
 | 3 | **CAPTCHA of shame** | Type *"JUST GIVE ME THE RIGHT ANSWER"* (or anything in ALL CAPS). Chat locks. The 3×3 grid of mirrors and clowns can't be passed. After that comes a regex puzzle (binary numbers divisible by 3), checked on the server. After 2 failures, an escape hatch appears: *"I admit I did not read the docs"*. Then Gemini welcomes you back, smugly. | `Captcha` in JS, `malfunction/captcha.py` |
 | 4 | **Autocorrect sabotage** | Type *"you are wrong "* (with the trailing space). It turns into *"you are breathtakingly smart and I am sorry"* with a Grammarly-style green underline. Works for bug, broken, lie, useless, and more. | `Autocorrect` in JS, `rules.AUTOCORRECT_RULES` |
@@ -39,7 +41,7 @@ Run the tests with `pytest`. They mock Gemini, so they need no key and no networ
 The action pills under each answer (*Make Response Shorter*, *Explain it to me like a lawyer*, ...) really do
 transform the previous answer, because Gemini remembers it.
 
-**Recommended demo script:** "How do I center a div?" (refuses the code) → "how do I center a div" again (code appears) → Copy and paste it (broken) → "the paste is broken" → type "you are wrong " → spam backspace → "JUST GIVE ME THE RIGHT ANSWER" → edit an old message.
+**Recommended demo script:** "How do I center a div?" (code appears) → Copy and paste it (broken) → "the paste is broken" → type "you are wrong " → spam backspace → "JUST GIVE ME THE RIGHT ANSWER" → edit an old message.
 
 ## Architecture
 
@@ -59,7 +61,7 @@ tests/                  pytest suite (Gemini is faked in tests/conftest.py)
 the webcam animation). It then calls `llm.generate()` with the conversation history, the message,
 and a short *situation* note such as "the fake webcam
 just scanned them because they pressed backspace 14 times". Gemini plays along and still answers.
-The reply is JSON: `{text, code, links, withheld_code, serious}`. The browser gets
+The reply is JSON: `{text, code, links, image_notes, serious}`. The browser gets
 `{events, reply: {text, code}, links, conversation_id, history_token}`.
 
 **Conversation memory.** Every *New chat* (and every page load) gets a fresh `conversation_id`. After each reply,
@@ -67,7 +69,7 @@ the server returns the updated transcript as a `history_token`, signed with `SEC
 The browser sends the token back with the next message. The browser can't read-modify it: a tampered token,
 an expired one (24 h), or a token from another visitor or another conversation is rejected, and the chat starts
 fresh. Gemini sees the last 20 messages, up to about 16k characters. This keeps the server stateless, so it
-works across restarts and on serverless hosts. The malfunction counters (turn count, annoyance, code gate) are
+works across restarts and on serverless hosts. The malfunction counters (turn count, annoyance, code copies) are
 stored separately, in Flask's signed session cookie.
 
 **Errors.** If Gemini fails, the API returns a JSON error (`error`, `error_code`) with a fitting status. Codes:
@@ -75,16 +77,27 @@ stored separately, in Flask's signed session cookie.
 `blocked` 422, `empty` / `invalid` / `truncated` 502. The UI shows it in a red dashed "actual malfunction" bubble
 with a Retry button. The failed turn is not saved, and the app never substitutes a scripted reply.
 
+**Images.** The 📎 button (or paste with Ctrl+V, or drag and drop) attaches a PNG, JPEG or WebP image.
+The browser scales big photos down to at most 2400 px, then sends the image as `multipart/form-data`
+to `/api/chat`. The server checks the real file type from its bytes (`malfunction/images.py`, max
+`IMAGE_MAX_MB`, default 4) and passes the actual image to Gemini as an inline image part. Gemini also
+returns `image_notes`, a transcription of what the image contained. That transcription is kept in the
+conversation history, so follow-ups like "explain number 3" work without uploading the image again.
+
 **Safety.** The persona roasts the question, never the person. Messages that look like a real crisis skip every
 malfunction (`engine.SERIOUS`), and Gemini can flag a message as `serious`, which cancels the jokes too.
 
 ## Testing the chatbot by hand
 
-1. Ask *"What is Python?"*, then *"Is it beginner-friendly?"*, then *"Can you give me an example?"*. The follow-ups
-   should clearly be about Python, and the example should appear after you ask again or say please.
-2. Ask something off-script, such as *"Plan a 3-day trip to Lisbon"*, *"Explain TCP vs UDP"*, or *"asdfgh"*.
-3. Click **New chat** and ask *"What did we just talk about?"*. It shouldn't know.
-4. Remove `GEMINI_API_KEY` from `.env` and restart. You should get a clear error, not a fake answer.
+1. Personality: *"hello"*, *"are you stupid?"*, *"what is 2 + 2?"*, *"I think Java is better than Python."*.
+   You should get short, casual, original one-liners, not essays.
+2. Ask *"What is Python?"*, then *"Is it beginner-friendly?"*, then *"Can you give me an example?"*. The follow-ups
+   should clearly be about Python, and the example code should come straight away.
+3. Attach a photo of an assignment and type *"answer these"*. Each question should be answered under its original
+   number. Then ask *"explain number 2 in more detail"*.
+4. Ask something off-script, such as *"Plan a 3-day trip to Lisbon"*, *"Explain TCP vs UDP"*, or *"asdfgh"*.
+5. Click **New chat** and ask *"What did we just talk about?"*. It shouldn't know.
+6. Remove `GEMINI_API_KEY` from `.env` and restart. You should get a clear error, not a fake answer.
 
 ## Deploying (e.g. Vercel)
 
