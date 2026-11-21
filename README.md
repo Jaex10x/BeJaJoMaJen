@@ -20,11 +20,6 @@ copy .env.example .env      # then edit .env: set GEMINI_API_KEY (and SECRET_KEY
 python app.py
 ```
 
-### Quick Launch (Windows)
-If you run into Windows App Execution Alias issues with `python.exe`, use the included launchers:
-- **PowerShell**: `.\run.ps1`
-- **File Explorer**: Double-click `run.bat`
-
 ### Configuration
 1. Get a Gemini API key at <https://aistudio.google.com/apikey>.
 2. Place it in `.env` as `GEMINI_API_KEY=your_key_here`.
@@ -83,7 +78,6 @@ static/app.js           Vanilla JS client (Trojan, Autocorrect, Glasses detector
 static/style.css        Doubt.ai theme (olive chrome, cream canvas, peach message cards, responsive layout)
 templates/index.html    Application UI shell, CAPTCHA modal, webcam overlay, and jumpscare elements
 tests/                  Comprehensive pytest test suite (Gemini is mocked in tests/conftest.py)
-run.ps1 / run.bat       One-click Windows execution launchers
 ```
 
 ### How a Message Flows
@@ -94,7 +88,7 @@ run.ps1 / run.bat       One-click Windows execution launchers
 
 ### Conversation Memory
 - Every conversation receives a fresh `conversation_id`.
-- The server issues an encrypted, signed `history_token` (via `itsdangerous`) back to the browser on every turn.
+- The server issues a signed (tamper-proof, not encrypted) `history_token` (via `itsdangerous`) back to the browser on every turn.
 - The client sends the token back with subsequent turns. This keeps the backend fully stateless and compatible with serverless hosts.
 - Tampered or cross-visitor tokens are rejected, resetting conversation history cleanly.
 
