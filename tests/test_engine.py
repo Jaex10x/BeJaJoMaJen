@@ -96,14 +96,11 @@ def test_rage_triggers_captcha_and_gemini_writes_the_aftermath(gemini):
 # --------------------------------------------------------------------------- #
 # 2. Fake webcam
 # --------------------------------------------------------------------------- #
-def test_backspace_spam_triggers_webcam(gemini):
+def test_backspace_spam_does_not_trigger_webcam(gemini):
     t = engine.Telemetry(keystrokes=40, backspaces=14, duration_ms=8000)
     out, _ = respond("why is this not working", telemetry=t)
-    evt = out["events"][0]
-    assert evt["type"] == "webcam" and evt["mood"] == "backspace" and evt["meme"]["emoji"] == "😤"
-    assert "backspace 14 times" in gemini.last["message"]
-    assert evt["verdict"] in gemini.last["message"]
-    assert "why is this not working" in gemini.last["message"]   # still answers the question
+    assert not any(e.get("type") == "webcam" for e in out["events"])
+    assert "why is this not working" in gemini.last["message"]
 
 
 def test_camera_button_always_picks_a_meme(client):

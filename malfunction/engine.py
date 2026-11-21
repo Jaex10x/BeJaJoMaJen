@@ -110,7 +110,7 @@ def caps_ratio(text: str) -> float:
 
 
 def is_rage(message: str) -> bool:
-    return bool(RAGE.search(message)) or caps_ratio(message) >= 0.7
+    return bool(RAGE.search(message))
 
 
 def is_serious(message: str) -> bool:
@@ -179,14 +179,6 @@ def respond(message: str, telemetry: Telemetry, state: SessionState, history: li
         state.annoyance += 2
         result["events"].append({"type": "captcha"})
         situation.append(rules.SITUATIONS["captcha"])
-
-    elif telemetry.agitated_by_backspace or telemetry.agitated_by_speed or caps_ratio(message) >= 0.45:
-        # 2. Fake webcam: agitated typing gets a posture lecture (and then, grudgingly, an answer).
-        state.annoyance += 1
-        event = webcam_event(telemetry, message, rng)
-        result["events"].append(event)
-        situation.append(rules.SITUATIONS["webcam"][event["mood"]].format(
-            backspaces=telemetry.backspaces, cpm=telemetry.cpm, verdict=event["verdict"]))
 
     elif state.code_given and CLIPBOARD_COMPLAINT.search(message):
         # 1. Trojan follow-up: the user noticed their paste was garbage. Blame the keyboard.
