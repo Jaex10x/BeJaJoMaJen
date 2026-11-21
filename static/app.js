@@ -778,11 +778,13 @@ const History = {
 /* -------------------------------------------------------------- Links panel */
 const Links = {
   reset() {
+    if (!dom.links) return;
     const p = el("p", "links-empty");
     p.append("Generated Links of ", el("b", "", "Websites"), " and ", el("b", "", "Documents"), " will appear here");
     dom.links.replaceChildren(p);
   },
   show(links, note) {
+    if (!dom.links) return;
     const title = el("h2", "links-title");
     title.append("Links to ", el("b", "", "Document"), " and ", el("b", "", "Website"), " for this Response");
     const nodes = [title];

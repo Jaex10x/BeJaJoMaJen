@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Doubt.ai</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo.png') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -13,7 +14,10 @@
 <div class="app">
   <!-- ============ Sidebar ============ -->
   <aside class="sidebar" id="sidebar">
-    <div class="side-brand"><b>Doubt</b>.ai</div>
+    <div class="side-brand">
+      <img class="brand-logo" src="{{ url_for('static', filename='img/logo.png') }}" alt="Doubt.ai">
+      <span><b>Doubt</b>.ai</span>
+    </div>
     <button class="new-chat" id="newChat" type="button"><span class="plus">+</span> New Chat</button>
     <nav class="history" id="history" aria-label="Chat history"></nav>
     <button class="upgrade" id="upgrade" type="button"><span class="i" data-icon="sparkle"></span> Upgrade to Plus</button>
@@ -70,10 +74,6 @@
     </div>
   </main>
 
-  <!-- ============ Links panel ============ -->
-  <aside class="links-panel" id="linksPanel">
-    <p class="links-empty">Generated Links of <b>Websites</b> and <b>Documents</b> will appear here</p>
-  </aside>
 </div>
 
 <div class="toast-zone" id="toastZone"></div>
