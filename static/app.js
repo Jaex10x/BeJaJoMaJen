@@ -551,7 +551,7 @@ const Webcam = {
       // No camera (blocked / missing): skip straight to the flash anyway.
       this.closeWindow();
       Toast.flash("No camera access? Fine. I'll use my imagination.");
-      Jumpscare.play("meme", 3000, this.snapshot);
+      Jumpscare.play("meme", 1500, this.snapshot);
       return;
     }
 
@@ -586,8 +586,8 @@ const Webcam = {
       Toast.flash("No face detected. Are you hiding from me?");
       return;
     }
-    if (glasses.wearing) Jumpscare.play("nerd", 3000);
-    else Jumpscare.play("face", 3000);   // look-alike found: shocked face + flash + "huss huss"
+    if (glasses.wearing) Jumpscare.play("nerd", 1500);
+    else Jumpscare.play("face", 1500);   // look-alike found: shocked face + flash + "huss huss"
   },
 
   /** Automatic (fake) scan triggered by agitated typing. No real camera is used here. */
@@ -1438,7 +1438,7 @@ const Jumpscare = {
    * @param {number} ms how long it stays on screen
    * @param {{src?: string, emoji?: string}} [picture] custom picture (used by "meme")
    */
-  play(mode, ms = 5000, picture = null) {
+  play(mode, ms = 2500, picture = null) {
     if (this.timer) return;           // already on screen
     const n = this.node;
     const img = n.querySelector("img");
