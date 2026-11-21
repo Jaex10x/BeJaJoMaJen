@@ -278,29 +278,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .cam-btn:hover:not(:disabled) { background: var(--sage-200); }
 .cam-btn.active { color: #d64545; animation: blink 1s steps(2) infinite; }
 :root[data-theme="dark"] .cam-btn { color: var(--ink); }
-.attach-btn {
-  width: 42px; flex: none; display: grid; place-items: center;
-  background: var(--peach); border: 1px solid var(--tan); border-left: none; border-right: 1px dashed var(--tan);
-  color: var(--olive-800);
-}
-.attach-btn .i { width: 18px; height: 18px; }
-.attach-btn:hover:not(:disabled) { background: var(--sage-200); }
-.attach-btn.has-file { color: var(--good); }
-:root[data-theme="dark"] .attach-btn { color: var(--ink); }
-.composer.dragging .field { outline: 2px dashed var(--tan-strong); outline-offset: -4px; }
-
-/* attached-image chip above the composer */
-.attachment {
-  max-width: 760px; margin: 0 auto 8px; display: flex; align-items: center; gap: 10px;
-  background: var(--peach); border: 1px solid var(--tan); border-radius: 8px; padding: 6px 8px; font-size: 12px;
-}
-.attachment[hidden] { display: none; }
-.attachment img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
-.attachment .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.attachment .remove { background: none; border: none; font-size: 14px; padding: 4px 8px; color: var(--muted); }
-.msg.user .card.has-image { flex-direction: column; align-items: stretch; }
-.msg.user .card.has-image .row { display: flex; align-items: center; gap: 12px; }
-.user-image { display: block; max-width: min(320px, 100%); max-height: 260px; border-radius: 6px; object-fit: contain; }
 .snapshot-strip { display: flex; flex-wrap: wrap; gap: 16px; margin: 10px 0 4px; }
 .snapshot-strip .snapshot:nth-child(2) img, .snapshot-strip .snapshot:nth-child(2) .snap-emoji { transform: rotate(-2deg); }
 .snap-note { font-size: 11px; color: var(--muted); }
