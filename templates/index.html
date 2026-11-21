@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIVA Chatbot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="app">
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="side-brand"><b>AIVA</b> CHATBOT</div>
+    <button class="new-chat" id="newChat" type="button"><span class="plus">+</span> New Chat</button>
+    <nav class="history" id="history" aria-label="Chat history"></nav>
+    <button class="upgrade" id="upgrade" type="button"><span class="i" data-icon="sparkle"></span> Upgrade to Plus</button>
+  </aside>
+
+  <!-- ============ Top bar ============ -->
+  <header class="topbar">
+    <button class="menu-btn" id="menuBtn" type="button" aria-label="Toggle sidebar">☰</button>
+    <div class="top-right">
+      <span class="cam-led" id="camLed" title="Camera">● REC</span>
+      <button class="theme-toggle" id="themeToggle" type="button" role="switch" aria-checked="false" aria-label="Dark mode">
+        <span class="knob"></span>
+      </button>
+      <div class="me" title="You"><span class="i" data-icon="user"></span><span class="notif"></span></div>
+    </div>
+  </header>
+
+  <!-- ============ Main ============ -->
+  <main class="main">
+    <section class="conversation" id="chat" aria-live="polite">
+      <div class="empty" id="empty">
+        <h2 class="hero" aria-label="AIVA Chatbot"><span>AIVA</span><span>CHATBOT</span></h2>
+        <div class="suggestions" id="suggestions"></div>
+      </div>
+    </section>
+
+    <div class="bottom">
+      <div class="regen-row">
+        <button class="regen" id="regen" type="button" hidden><span class="i" data-icon="refresh"></span> Regenerate response</button>
+      </div>
+      <form class="composer" id="composer" autocomplete="off">
+        <button class="cam-btn" id="camBtn" type="button" title="Read my facial expression" aria-label="Camera">
+          <span class="i" data-icon="camera"></span>
+        </button>
+        <div class="field" id="field">
+          <div class="backdrop" id="backdrop" aria-hidden="true"></div>
+          <textarea id="input" rows="1" placeholder="Send a message..." aria-label="Message"></textarea>
+          <span class="tone-badge" id="toneBadge" title="Tone corrections applied" hidden>0</span>
+        </div>
+        <button class="send" id="send" type="submit" aria-label="Send"><span class="i" data-icon="send"></span></button>
+      </form>
+    </div>
+  </main>
+
+  <!-- ============ Links panel ============ -->
+  <aside class="links-panel" id="linksPanel">
+    <p class="links-empty">Generated Links of <b>Websites</b> and <b>Documents</b> will appear here</p>
+  </aside>
+</div>
+
+<div class="toast-zone" id="toastZone"></div>
+
+<!-- Fake webcam window (no camera is ever used) -->
+<div class="cam-window" id="camWindow" hidden aria-hidden="true"
+     data-base="{{ url_for('static', filename='img/webcam/') }}">
+  <div class="cam-top"><span class="live">● LIVE</span><span>FaceCam™ · front camera</span></div>
+  <div class="cam-feed">
+    <video id="camVideo" autoplay playsinline muted hidden></video>
+    <img id="camImg" alt="" hidden>
+    <div class="cam-emoji" id="camEmoji" hidden></div>
+    <div class="cam-noise"></div>
+    <div class="cam-grid"></div>
+    <div class="face-box" id="faceBox"><span id="faceLabel"></span></div>
+    <div class="scanline"></div>
+  </div>
+  <div class="cam-caption" id="camCaption">Initializing camera...</div>
+</div>
+
+<!-- Theme-toggle jumpscares (one per direction) -->
+<div class="jumpscare" id="jumpscare" hidden aria-hidden="true"
+     data-dark="{{ url_for('static', filename='img/jumpscare.png') }}"
+     data-light="{{ url_for('static', filename='img/lightscare.png') }}">
+  <img src="{{ url_for('static', filename='img/jumpscare.png') }}" alt="">
+  <div class="flash"></div>
+</div>
+
+<!-- CAPTCHA of shame -->
+<div class="modal" id="captcha" hidden>
+  <div class="captcha-card" role="dialog" aria-modal="true" aria-labelledby="captchaTitle">
+    <section data-stage="checkbox">
+      <div class="robot-row">
+        <button class="robot-box" id="robotBox" type="button" aria-label="Verify"></button>
+        <span id="captchaTitle">I am a capable developer</span>
+        <div class="recaptcha-logo"><span>🛡️</span><small>shameCAPTCHA</small></div>
+      </div>
+      <p class="captcha-note">Suspicious tone detected. Verify you are a capable developer before proceeding.</p>
+    </section>
+
+    <section data-stage="grid" hidden>
+      <div class="captcha-head">
+        <small>Select all squares containing</small>
+        <strong>a bug in your own code</strong>
+        <small>If there are none, click skip</small>
+      </div>
+      <div class="captcha-grid" id="captchaGrid"></div>
+      <p class="captcha-error" id="gridError"></p>
+      <div class="captcha-foot">
+        <span class="icons">⟳ 🎧 ⓘ</span>
+        <button class="ghost" id="gridSkip" type="button">Skip</button>
+        <button class="primary" id="gridVerify" type="button">Verify</button>
+      </div>
+    </section>
+
+    <section data-stage="regex" hidden>
+      <div class="captcha-head">
+        <small id="regexTitle">Additional verification required</small>
+        <strong id="regexPrompt"></strong>
+        <small id="regexFlavor"></small>
+      </div>
+      <div class="regex-cases">
+        <div><b>Must match</b><ul id="mustMatch"></ul></div>
+        <div><b>Must NOT match</b><ul id="mustNot"></ul></div>
+      </div>
+      <input id="regexInput" class="regex-input" spellcheck="false" placeholder="^your regex here$">
+      <p class="captcha-error" id="regexError"></p>
+      <p class="captcha-hint" id="regexHint"></p>
+      <div class="captcha-foot">
+        <button class="shame" id="shameBtn" type="button" hidden>I admit I did not read the docs</button>
+        <button class="primary" id="regexVerify" type="button">Verify</button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>
