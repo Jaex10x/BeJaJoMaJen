@@ -90,7 +90,9 @@
 <div class="jumpscare" id="jumpscare" hidden aria-hidden="true"
      data-dark="{{ url_for('static', filename='img/jumpscare.png') }}"
      data-light="{{ url_for('static', filename='img/lightscare.png') }}"
-     data-nerd="{{ url_for('static', filename='img/nerd.png') }}">
+     data-nerd="{{ url_for('static', filename='img/nerd.png') }}"
+     data-face="{{ url_for('static', filename='img/shocked.png') }}"
+     data-face-sound="{{ url_for('static', filename='sfx/huss.mp3') }}">
   <img src="{{ url_for('static', filename='img/jumpscare.png') }}" alt="">
   <div class="scare-emoji" hidden></div>
   <div class="flash"></div>

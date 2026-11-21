@@ -462,17 +462,27 @@ body.locked .composer { filter: grayscale(1); }
   pointer-events: none;          /* the click still reaches the message box underneath */
   box-shadow: 0 30px 80px rgba(0,0,0,.3);
   will-change: transform, opacity;   /* GPU-composited = smooth */
-  animation: fly-through 2.2s cubic-bezier(.45, .05, .55, .95) both;
+  backface-visibility: hidden;
+  /* linear timing: the keyframes below already encode the motion curve, so no per-segment easing stutter */
+  animation: fly-through 2.2s linear both;
 }
-.flythrough[hidden] { display: none; }
-/* One continuous zoom: the bigger it gets, the more transparent it becomes, until it passes through you. */
+/* Keep it rendered (and its image decoded) while idle, just invisible, so the first frame doesn't stall. */
+.flythrough[hidden] { display: block; visibility: hidden; animation: none; }
+/* One continuous zoom. Scale grows exponentially (x1.585 every 10%), which reads as a constant-speed approach;
+   it fades in quickly, then fades out smoothly as it passes through you. */
 @keyframes fly-through {
-  0%   { transform: translate(-50%, -50%) scale(.05); opacity: 0; }
-  8%   { transform: translate(-50%, -50%) scale(.15); opacity: 1; }
-  35%  { transform: translate(-50%, -50%) scale(.6);  opacity: .85; }
-  60%  { transform: translate(-50%, -50%) scale(1.3); opacity: .55; }
-  80%  { transform: translate(-50%, -50%) scale(2.6); opacity: .25; }
-  100% { transform: translate(-50%, -50%) scale(5);   opacity: 0; }
+  0%   { transform: translate(-50%, -50%) scale(.05);  opacity: 0; }
+  5%   { transform: translate(-50%, -50%) scale(.063); opacity: 1; }
+  10%  { transform: translate(-50%, -50%) scale(.079); opacity: 1; }
+  20%  { transform: translate(-50%, -50%) scale(.126); opacity: 1; }
+  30%  { transform: translate(-50%, -50%) scale(.2);   opacity: .97; }
+  40%  { transform: translate(-50%, -50%) scale(.317); opacity: .92; }
+  50%  { transform: translate(-50%, -50%) scale(.5);   opacity: .85; }
+  60%  { transform: translate(-50%, -50%) scale(.79);  opacity: .72; }
+  70%  { transform: translate(-50%, -50%) scale(1.26); opacity: .55; }
+  80%  { transform: translate(-50%, -50%) scale(2);    opacity: .35; }
+  90%  { transform: translate(-50%, -50%) scale(3.17); opacity: .15; }
+  100% { transform: translate(-50%, -50%) scale(5);    opacity: 0; }
 }
 
 /* ---------- dark-mode jumpscare ---------- */

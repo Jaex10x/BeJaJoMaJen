@@ -452,7 +452,7 @@ const Webcam = {
       return;
     }
     if (glasses.wearing) Jumpscare.play("nerd", 3000);
-    else Jumpscare.play("meme", 3000, this.snapshot);
+    else Jumpscare.play("face", 3000);   // look-alike found: shocked face + flash + "huss huss"
   },
 
   /** Automatic (fake) scan triggered by agitated typing. No real camera is used here. */
@@ -1127,7 +1127,13 @@ const Theme = {
       const dark = document.documentElement.dataset.theme !== "dark";
       this.apply(dark);
       store.set("doubt.theme", dark ? "dark" : "light");
-      Jumpscare.play(dark ? "dark" : "light");   // fires on every user toggle, never on page load
+      // Each jumpscare (to dark, to light) plays only once per page load; later toggles just switch the theme.
+      const mode = dark ? "dark" : "light";
+      this.scared ??= new Set();
+      if (!this.scared.has(mode)) {
+        this.scared.add(mode);
+        Jumpscare.play(mode);
+      }
     });
   },
 };
@@ -1204,7 +1210,20 @@ const Jumpscare = {
   timer: null,
   init() {
     // Preload every image so the scare is instant, not a slow-loading image.
-    for (const mode of ["dark", "light", "nerd"]) new Image().src = this.node.dataset[mode];
+    for (const mode of ["dark", "light", "nerd", "face"]) new Image().src = this.node.dataset[mode];
+    // Preload the meme sound; if the file is missing we fall back to the synthesised flashbang.
+    this.faceSound = new Audio(this.node.dataset.faceSound);
+    this.faceSound.preload = "auto";
+    this.faceSoundOk = false;
+    this.faceSound.addEventListener("canplaythrough", () => { this.faceSoundOk = true; }, { once: true });
+    this.faceSound.addEventListener("error", () => { this.faceSoundOk = false; }, { once: true });
+  },
+  playFaceSound(seconds) {
+    const a = this.faceSound;
+    if (!a || !this.faceSoundOk) { Sfx.flashbang(seconds); return; }
+    a.currentTime = 0;
+    a.volume = 1;
+    a.play().catch(() => Sfx.flashbang(seconds));
   },
   /**
    * @param {"dark"|"light"|"nerd"|"meme"} mode
@@ -1224,7 +1243,9 @@ const Jumpscare = {
     n.classList.toggle("light", mode === "light");
     n.classList.toggle("nerd", mode === "nerd");
     n.hidden = false;
-    if (mode !== "dark") Sfx.flashbang(ms / 1000);   // sound + picture start together
+    // sound + picture start together
+    if (mode === "face") this.playFaceSound(ms / 1000);
+    else if (mode !== "dark") Sfx.flashbang(ms / 1000);
     // restart CSS animations every time it fires
     n.querySelectorAll("img, .scare-emoji, .flash").forEach((x) => { x.style.animation = "none"; void x.offsetWidth; x.style.animation = ""; });
     this.timer = setTimeout(() => { n.hidden = true; this.timer = null; }, ms);
@@ -1239,13 +1260,16 @@ const FlyThrough = {
     if (this.playing) return;
     this.playing = true;
     const n = this.node;
-    n.hidden = false;
-    n.style.animation = "none";      // restart the animation on every trigger
-    void n.offsetWidth;
-    n.style.animation = "";
-    n.addEventListener("animationend", () => { n.hidden = true; this.playing = false; }, { once: true });
+    // Wait until the image is decoded, then start on the next frame so the first frames don't drop.
+    const start = () => requestAnimationFrame(() => {
+      n.addEventListener("animationend", () => { n.hidden = true; this.playing = false; }, { once: true });
+      n.hidden = false;
+    });
+    (n.decode ? n.decode() : Promise.resolve()).then(start, start);
   },
 };
+// Decode the picture ahead of time so the first click is smooth.
+FlyThrough.node.decode?.().catch(() => {});
 
 function bindChrome() {
   // Only the very first click on the message box (per page load).
