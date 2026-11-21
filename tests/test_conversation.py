@@ -36,12 +36,14 @@ def test_different_conversations_do_not_share_history(client, gemini):
 
 def test_new_chat_resets_history_and_malfunction_state(chat, gemini):
     chat.send("Remember the number 42")
-    gemini.queue.append(reply_json("Ask nicely.", withheld_code=True))
-    chat.send("show me the code")
+    chat.send("ok")
+    with chat.http.session_transaction() as sess:
+        assert sess["malfunction"]["turns"] == 2
     chat.new_chat()
-    chat.send("show me the code")
+    chat.send("What number did I ask you to remember?")
     assert gemini.last["history"] == []
-    assert "withhold it" in gemini.last["message"]     # code gate reset too (would be "earned" otherwise)
+    with chat.http.session_transaction() as sess:
+        assert sess["malfunction"]["turns"] == 1          # counters reset with the chat
 
 
 def test_history_token_cannot_be_forged_or_reused_by_someone_else(chat, gemini):

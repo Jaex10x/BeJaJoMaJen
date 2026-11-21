@@ -22,9 +22,9 @@ class FakeResponse:
         self.prompt_feedback = SimpleNamespace(block_reason=block_reason) if block_reason else None
 
 
-def reply_json(text="ok", code=None, links=None, withheld_code=False, serious=False) -> str:
+def reply_json(text="ok", code=None, links=None, image_notes="", serious=False) -> str:
     return json.dumps({"text": text, "code": code, "links": links or [],
-                       "withheld_code": withheld_code, "serious": serious})
+                       "image_notes": image_notes, "serious": serious})
 
 
 class FakeGemini:
@@ -40,11 +40,15 @@ class FakeGemini:
 
         class _Chat:
             def send_message(self, message):
+                parts = message if isinstance(message, list) else [message]
+                message = "\n".join(p for p in parts if isinstance(p, str))
                 gemini.calls.append({
                     "model": model,
                     "config": config,
                     "history": [(c.role, c.parts[0].text) for c in (history or [])],
                     "message": message,
+                    "images": [(p.inline_data.mime_type, p.inline_data.data)
+                               for p in parts if getattr(p, "inline_data", None)],
                 })
                 item = gemini.queue.pop(0) if gemini.queue else None
                 if isinstance(item, Exception):
